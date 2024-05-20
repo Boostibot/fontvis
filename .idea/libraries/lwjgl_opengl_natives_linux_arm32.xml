@@ -1,0 +1,19 @@
+<component name="libraryTable">
+  <library name="lwjgl-opengl-natives-linux-arm32">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/libs/lwjgl/lwjgl-opengl/lwjgl-opengl-natives-linux-arm32.jar!/" />
+      <root url="jar://$PROJECT_DIR$/libs/lwjgl/lwjgl-opengl/lwjgl-opengl-natives-linux-arm64.jar!/" />
+      <root url="jar://$PROJECT_DIR$/libs/lwjgl/lwjgl-opengl/lwjgl-opengl-natives-linux.jar!/" />
+      <root url="jar://$PROJECT_DIR$/libs/lwjgl/lwjgl-opengl/lwjgl-opengl-natives-macos-arm64.jar!/" />
+      <root url="jar://$PROJECT_DIR$/libs/lwjgl/lwjgl-opengl/lwjgl-opengl-natives-macos.jar!/" />
+      <root url="jar://$PROJECT_DIR$/libs/lwjgl/lwjgl-opengl/lwjgl-opengl-natives-windows-arm64.jar!/" />
+      <root url="jar://$PROJECT_DIR$/libs/lwjgl/lwjgl-opengl/lwjgl-opengl-natives-windows-x86.jar!/" />
+      <root url="jar://$PROJECT_DIR$/libs/lwjgl/lwjgl-opengl/lwjgl-opengl-natives-windows.jar!/" />
+      <root url="jar://$PROJECT_DIR$/libs/lwjgl/lwjgl-opengl/lwjgl-opengl.jar!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES>
+      <root url="jar://$PROJECT_DIR$/libs/lwjgl/lwjgl-opengl/lwjgl-opengl-sources.jar!/" />
+    </SOURCES>
+  </library>
+</component>
