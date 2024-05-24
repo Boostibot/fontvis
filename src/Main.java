@@ -56,7 +56,6 @@ public class Main {
         public static MemoryStack stack;
     }
 
-
     private void run() {
         if (!glfwInit())
             throw new IllegalStateException("Unable to initialize GLFW");
@@ -140,6 +139,7 @@ public class Main {
         Quadratic_Bezier_Buffer bezier_buffer = new Quadratic_Bezier_Buffer(64*MB);
 
         Matrix4f view_matrix = new Matrix4f();
+        Matrix3f transf_matrix = new Matrix3f();
         Matrix4f model_matrix = new Matrix4f();
         float rotation = 0;
         float rotate_speed = 1;
@@ -195,34 +195,11 @@ public class Main {
                 double t = glfwGetTime();
                 double t1 = t + 1;
 
-                bezier_buffer.submit(
-                    -0.5f, 0, 0xFF0000, //p1
-                    0.5f, 0.5f, 0x00FF00, //p2
-                    0.5f, 0, 0x00FF00, //p3
-                    Quadratic_Bezier_Buffer.FLAG_SOLID | Quadratic_Bezier_Buffer.FLAG_OKLAB //flags
-                );
-                bezier_buffer.submit(
-                    -0.5f, 0.5f, 0xFF0000, //p2
-                    0.5f, 0.5f, 0x00FF00, //p1
-                    -0.5f, 0, 0xFF0000, //p3
-                    Quadratic_Bezier_Buffer.FLAG_SOLID | Quadratic_Bezier_Buffer.FLAG_OKLAB //flags
-                );
+//                transf_matrix.identity().m10((float) sin(t));
+                bezier_buffer.submit_circle(0, 0, 1, 0xFF0000, 0x00FF00, 0xFF0000, Quadratic_Bezier_Buffer.FLAG_OKLAB, null);
+                bezier_buffer.submit_rounded_rectangle(0, 0, 1.5f, 0.7f, (float) (sin(t)*sin(t)*0.5), 0x33FA57, null);
 
-                bezier_buffer.submit(
-                        0, 0.7f, //p1
-                        0, 0, //p2
-                        0.7f, 0, //p3
-                        Colorspace.rgba_to_hex((float) (sin(t)*sin(t)), (float) (cos(t)*cos(t)), 1, 0.5f), //color
-                        0 //flags
-                );
-                bezier_buffer.submit(
-                        0.7f, 0.7f, //p1
-                        0, 0, //p2
-                        0.7f, 0, //p3
-                        0x80AAAAFF, //color
-                        0 //flags
-                );
-
+                model_matrix.identity().m10((float) sin(t));
                 bezier_render.render(model_matrix, view_matrix, bezier_buffer);
                 bezier_buffer.reset();
 
@@ -231,8 +208,9 @@ public class Main {
         }
     }
 
-    public static class Quadratic_Bezier_Buffer {
+    public static final class Quadratic_Bezier_Buffer {
         //2 floats position
+        //2 floats uv
         //1 uint for color
         //1 uint for flags
         public ByteBuffer buffer;
@@ -241,12 +219,15 @@ public class Main {
         public int capacity;
         public boolean grows = true;
 
-        public static int BYTES_PER_VERTEX = 2*Float.BYTES + 2*Integer.BYTES;
+        public static int BYTES_PER_VERTEX = 4*Float.BYTES + 2*Integer.BYTES;
         public static int VERTICES_PER_SEGMENT = 3;
         public static int BYTES_PER_SEGMENT = VERTICES_PER_SEGMENT*BYTES_PER_VERTEX;
-        public static int FLAG_CONCAVE = 1;
-        public static int FLAG_SOLID = 2;
-        public static int FLAG_OKLAB = 4;
+
+        //default rendering mode: solid triangle with points p1, p2, p3
+        public static int FLAG_BEZIER = 1; //the trinagle is interpreted as quadratic bezier curve where p1, p3 are endpoints and p2 is control point
+        public static int FLAG_CIRCLE = 2; //the triangle is interpreted as circle segement where p2 is the center, and p1, p2 mark the segment sides. The radius is 1 in uv space.
+        public static int FLAG_INVERSE = 4; //the triangle shape is filled inside out. When combiend with redering trinagles, makes the triangle entirely invisible!
+        public static int FLAG_OKLAB = 8; //vertex colors are interpolated in the OKLAB colorspace instead of linear colorspace.
 
         public Quadratic_Bezier_Buffer(int max_cpu_size)
         {
@@ -268,37 +249,266 @@ public class Main {
             assert buffer != null;
         }
 
-        public void submit(float x1, float y1, int color1,
-                           float x2, float y2, int color2,
-                           float x3, float y3, int color3,
-                           int flags)
+
+        public void submit(float x1, float y1, float u1, float v1, int color1,
+                           float x2, float y2, float u2, float v2, int color2,
+                           float x3, float y3, float u3, float v3, int color3,
+                           int flags, Matrix3f transform_or_null)
         {
+            //If transfomr is passed in apply it to all vertices (but not uvs!)
+            if(transform_or_null != null)
+            {
+                float x1_ = x1;
+                x1 = transform_or_null.m00*x1_ + transform_or_null.m10*y1 + transform_or_null.m20;
+                y1 = transform_or_null.m01*x1_ + transform_or_null.m11*y1 + transform_or_null.m21;
+
+                float x2_ = x2;
+                x2 = transform_or_null.m00*x2_ + transform_or_null.m10*y2 + transform_or_null.m20;
+                y2 = transform_or_null.m01*x2_ + transform_or_null.m11*y2 + transform_or_null.m21;
+
+                float x3_ = x3;
+                x3 = transform_or_null.m00*x3_ + transform_or_null.m10*y3 + transform_or_null.m20;
+                y3 = transform_or_null.m01*x3_ + transform_or_null.m11*y3 + transform_or_null.m21;
+            }
+
             reserve(length + 1);
 
             buffer.putFloat(x1);
             buffer.putFloat(y1);
+            buffer.putFloat(u1);
+            buffer.putFloat(v1);
             buffer.putInt(color1);
             buffer.putInt(flags);
 
             buffer.putFloat(x2);
             buffer.putFloat(y2);
+            buffer.putFloat(u2);
+            buffer.putFloat(v2);
             buffer.putInt(color2);
             buffer.putInt(flags);
 
             buffer.putFloat(x3);
             buffer.putFloat(y3);
+            buffer.putFloat(u3);
+            buffer.putFloat(v3);
             buffer.putInt(color3);
             buffer.putInt(flags);
             length += 1;
         }
 
-        public void submit(float x1, float y1,
-                           float x2, float y2,
-                           float x3, float y3,
-                           int color, int flags)
+        public void submit_bezier_or_triangle(
+            float x1, float y1, int color1,
+            float x2, float y2, int color2,
+            float x3, float y3, int color3,
+            int flags, Matrix3f transform_or_null)
         {
-            //Doesnt make sense to use fancy interpolation for triangle where all color are the same!
-            submit(x1, y1, color, x2, y2, color, x3, y3, color, flags & ~FLAG_OKLAB);
+            submit(x1, y1, 0, 0, color1, x2, y2, 0.5f, 0, color2, x3, y3, 1, 1, color3, flags, transform_or_null);
+        }
+
+        public void submit_circle_segment(
+            float x1, float y1, int color1,
+            float x2, float y2, int color2,
+            float x3, float y3, int color3,
+            float r, int flags, Matrix3f transform_or_null)
+        {
+            submit(x1, y1, (x1 - x2)/r, (y1 - y2)/r, color1,
+                   x2, y2, 0, 0, color2,
+                   x3, y3, (x3 - x2)/r, (y3 - y2)/r, color3,
+                   flags | FLAG_CIRCLE & ~FLAG_BEZIER, transform_or_null);
+        }
+
+        public void submit_bezier_or_triangle(
+            float x1, float y1,
+            float x2, float y2,
+            float x3, float y3, int color,
+            int flags, Matrix3f transform_or_null)
+        {
+            submit_bezier_or_triangle(x1, y1, color, x2, y2, color, x3, y3, color, flags & ~FLAG_OKLAB, transform_or_null);
+        }
+
+        public void submit_circle(float x, float y, float r, int color1, int color2, int color3, int flags, Matrix3f transform_or_null)
+        {
+            float sqrt3 = 1.7320508075688772f;
+            submit(
+                x + -sqrt3*r, y + -r, -sqrt3, -1, color1,
+                x + sqrt3*r, y + -r, sqrt3, -1, color2,
+                x, y + 2*r, 0, 2, color3,
+                Quadratic_Bezier_Buffer.FLAG_CIRCLE | flags, transform_or_null
+            );
+        }
+
+        public void submit_circle(float x, float y, float r, int color, Matrix3f transform_or_null)
+        {
+            submit_circle(x,y, r, color, color, color, 0, transform_or_null);
+        }
+
+        public void submit_rectangle(float x, float y, float width, float height, int c_ul, int c_ur, int c_ll, int c_lr, int flags, Matrix3f transform_or_null)
+        {
+            float w2 = width/2;
+            float h2 = height/2;
+            //upper left triangle
+            submit(
+                x-w2, y+h2, 0, 0, c_ul,
+                x+w2, y+h2, 0, 0, c_ur,
+                x-w2, y-h2, 0, 0, c_ll,
+                flags, transform_or_null
+            );
+            //lower right triangle
+            submit(
+                x-w2, y-h2, 0, 0, c_ll,
+                x+w2, y+h2, 0, 0, c_ur,
+                x+w2, y-h2, 0, 0, c_lr,
+                flags, transform_or_null
+            );
+        }
+
+        public void submit_rectangle(float x, float y, float width, float height, int color, Matrix3f transform_or_null)
+        {
+            submit_rectangle(x, y, width, height, color, color, color, color, 0, transform_or_null);
+        }
+
+        public void submit_rounded_rectangle(float x, float y, float width, float height, float corner_radius, int color, Matrix3f transform_or_null)
+        {
+            if(corner_radius <= 0)
+                submit_rectangle(x, y, width, height, color, transform_or_null);
+            else
+            {
+                float w2 = width/2;
+                float h2 = height/2;
+                float r = corner_radius;
+                float eps = 0.0000001f;
+                if(r > w2)
+                    r = w2;
+                if(r > h2)
+                    r = h2;
+                if(h2 - r < eps)
+                {
+                    submit_circle(x - w2 + r, y, r, color, transform_or_null);
+                    submit_rectangle(x, y, width - 2*r, height, color, transform_or_null);
+                    submit_circle(x + w2 - r, y, r, color, transform_or_null);
+                }
+                else if (w2 - r < eps)
+                {
+                    submit_circle(x, y - h2 + r, r, color, transform_or_null);
+                    submit_rectangle(x, y, width, height - 2*r, color, transform_or_null);
+                    submit_circle(x, y + h2 - r, r, color, transform_or_null);
+                }
+                else
+                {
+                    //Corners
+                    //
+                    // All corners are made of a circle filled triangle like so:
+                    //      r
+                    //    <--->
+                    //  ^ 1 - 2
+                    // r| |  /
+                    //  | | /
+                    //  V 3
+                    // Where each point 1,2,3 has x and y components.
+                    //
+                    // The diagram is the case for Upper Left (ul).
+                    // All other corners are mirrors this means that
+                    // Upper Right is (ur) is ul flipped horizontally,
+                    // Lower left (ll) is ul flipped vertically and
+                    // Lower Right (lr) is ul flipped both horizontally and vertically.
+
+                    float ul_x1 = x - w2;
+                    float ul_y1 = y + h2;
+                    float ul_x2 = ul_x1 + r;
+                    float ul_y2 = ul_y1;
+                    float ul_x3 = ul_x1;
+                    float ul_y3 = ul_y1 - r;
+                    submit(
+                        ul_x2, ul_y2, 1, 0, color,
+                        ul_x1, ul_y1, 1, 1, color,
+                        ul_x3, ul_y3, 0, 1, color,
+                        FLAG_CIRCLE, transform_or_null
+                    );
+
+                    float ur_x1 = x + w2;
+                    float ur_y1 = y + h2;
+                    float ur_x2 = ur_x1 - r;
+                    float ur_y2 = ur_y1;
+                    float ur_x3 = ur_x1;
+                    float ur_y3 = ur_y1 - r;
+                    submit(
+                        ur_x2, ur_y2, 1, 0, color,
+                        ur_x1, ur_y1, 1, 1, color,
+                        ur_x3, ur_y3, 0, 1, color,
+                        FLAG_CIRCLE, transform_or_null
+                    );
+
+                    float ll_x1 = x - w2;
+                    float ll_y1 = y - h2;
+                    float ll_x2 = ll_x1 + r;
+                    float ll_y2 = ll_y1;
+                    float ll_x3 = ll_x1;
+                    float ll_y3 = ll_y1 + r;
+                    submit(
+                        ll_x2, ll_y2, 1, 0, color,
+                        ll_x1, ll_y1, 1, 1, color,
+                        ll_x3, ll_y3, 0, 1, color,
+                        FLAG_CIRCLE, transform_or_null
+                    );
+
+                    float lr_x1 = x + w2;
+                    float lr_y1 = y - h2;
+                    float lr_x2 = lr_x1 - r;
+                    float lr_y2 = lr_y1;
+                    float lr_x3 = lr_x1;
+                    float lr_y3 = lr_y1 + r;
+                    submit(
+                        lr_x2, lr_y2, 1, 0, color,
+                        lr_x1, lr_y1, 1, 1, color,
+                        lr_x3, lr_y3, 0, 1, color,
+                        FLAG_CIRCLE, transform_or_null
+                    );
+
+                    //top strip between ul and ul
+                    submit(
+                        ul_x2, ul_y2, 0, 0, color,
+                        ur_x2, ur_y2, 0, 0, color,
+                        ul_x3, ul_y3, 0, 0, color,
+                        0, transform_or_null
+                    );
+
+                    submit(
+                        ul_x3, ul_y3, 0, 0, color,
+                        ur_x3, ur_y3, 0, 0, color,
+                        ur_x2, ur_y2, 0, 0, color,
+                        0, transform_or_null
+                    );
+
+                    //between all corners
+                    submit(
+                        ul_x3, ul_y3, 0, 0, color,
+                        ur_x3, ur_y3, 0, 0, color,
+                        ll_x3, ll_y3, 0, 0, color,
+                        0, transform_or_null
+                    );
+                    submit(
+                        ll_x3, ll_y3, 0, 0, color,
+                        lr_x3, lr_y3, 0, 0, color,
+                        ur_x3, ur_y3, 0, 0, color,
+                        0, transform_or_null
+                    );
+
+                    //Bottom strip between ll and ll
+                    submit(
+                        ll_x2, ll_y2, 0, 0, color,
+                        lr_x2, lr_y2, 0, 0, color,
+                        ll_x3, ll_y3, 0, 0, color,
+                        0, transform_or_null
+                    );
+
+                    submit(
+                        ll_x3, ll_y3, 0, 0, color,
+                        lr_x3, lr_y3, 0, 0, color,
+                        lr_x2, lr_y2, 0, 0, color,
+                        0, transform_or_null
+                    );
+                }
+            }
         }
 
         void reset()
@@ -308,7 +518,7 @@ public class Main {
         }
     }
 
-    public static class Quadratic_Bezier_Render {
+    public static final class Quadratic_Bezier_Render {
         public int VBO;
         public int VAO;
         public int shader;
@@ -335,12 +545,14 @@ public class Main {
 
                 long pos = 0;
                 glVertexAttribPointer(0, 2, GL_FLOAT, false, BYTES_PER_VERTEX, pos); pos += 2*Float.BYTES; //position
-                glVertexAttribIPointer(1, 1, GL_UNSIGNED_INT, BYTES_PER_VERTEX, pos); pos += Integer.BYTES; //color
-                glVertexAttribIPointer(2, 1, GL_UNSIGNED_INT, BYTES_PER_VERTEX, pos); pos += Integer.BYTES; //flags
+                glVertexAttribPointer(1, 2, GL_FLOAT, false, BYTES_PER_VERTEX, pos); pos += 2*Float.BYTES; //uv
+                glVertexAttribIPointer(2, 1, GL_UNSIGNED_INT, BYTES_PER_VERTEX, pos); pos += Integer.BYTES; //color
+                glVertexAttribIPointer(3, 1, GL_INT, BYTES_PER_VERTEX, pos); pos += Integer.BYTES; //flags
 
                 glEnableVertexAttribArray(0);
                 glEnableVertexAttribArray(1);
                 glEnableVertexAttribArray(2);
+                glEnableVertexAttribArray(3);
 
                 glBindBuffer(GL_ARRAY_BUFFER, 0);
                 glBindVertexArray(0);
@@ -351,35 +563,33 @@ public class Main {
                     """
                     #version 330 core
                     layout (location = 0) in vec2 vertex_pos;
-                    layout (location = 1) in uint vertex_color;
-                    layout (location = 2) in uint vertex_flags;
+                    layout (location = 1) in vec2 vertex_uv;
+                    layout (location = 2) in uint vertex_color;
+                    layout (location = 3) in int vertex_flags;
                     out vec2 uv;
                     out vec4 color;
-                    flat out uint flags;
+                    flat out int flags;
                     
                     uniform mat4 model;
                     uniform mat4 view;
                     void main()
                     {
-                        switch(gl_VertexID % 3)
-                        {
-                            case 0: uv = vec2(0, 0); break;
-                            case 1: uv = vec2(0.5, 0); break;
-                            case 2: uv = vec2(1, 1); break;
-                        }
-                        
                         uint ucol = uint(vertex_color);
                         uint a = uint(255) - (ucol >> 24) & uint(0xFF);
                         uint r = (ucol >> 16) & uint(0xFF);
                         uint g = (ucol >> 8) & uint(0xFF);
                         uint b = (ucol >> 0) & uint(0xFF);
                         
-                        flags = uint(vertex_flags);
+                        flags = vertex_flags;
                         vec4 out_color = vec4(r/255.0, g/255.0, b/255.0, a/255.0);
                         out_color.xyz = srgb_to_linear(out_color.xyz);
-                        if((vertex_flags & uint(FLAG_OKLAB)) != uint(0))
+                        if((vertex_flags & FLAG_OKLAB) != 0)
                             out_color.xyz = linear_to_oklab(out_color.xyz);
                         
+                        uv = vertex_uv;
+//                        if((vertex_flags & FLAG_CIRCLE) != 0)
+//                            uv = (view * model * vec4(vertex_uv, 0, 1)).xy;
+                            
                         color = out_color;
                         vec4 pos = view * model * vec4(vertex_pos, 0, 1);
                         gl_Position = pos;
@@ -391,19 +601,19 @@ public class Main {
                     
                     in vec2 uv;
                     in vec4 color;
-                    flat in uint flags;
+                    flat in int flags;
                     uniform float aa_threshold;
                     
                     void main()
                     {
                         float dist = -999999;
-                        if((flags & uint(FLAG_SOLID)) == uint(0))
-                        {
-                            float u = uv.x;
-                            float v = uv.y;
-                            vec2 du = dFdx(uv);
-                            vec2 dv = dFdy(uv);
+                        float u = uv.x;
+                        float v = uv.y;
+                        vec2 du = dFdx(uv);
+                        vec2 dv = dFdy(uv);
                         
+                        if((flags & FLAG_BEZIER) != 0)
+                        {
                             float F = u*u - v;
                             vec2 J_F = vec2(
                                 2*u*du.x - du.y,
@@ -411,16 +621,22 @@ public class Main {
                             );
                             dist = F/(length(J_F) + 0.0000001);
                         }
+                        else if((flags & FLAG_CIRCLE) != 0)
+                        {
+                            float F = u*u + v*v - 1;
+                            vec2 J_F = vec2(
+                                2*u*du.x + 2*v*du.y,
+                                2*u*dv.x + 2*v*dv.y
+                            );
+                            dist = F/(length(J_F) + 0.0000001);
+                        }
                         
-                        if((flags & uint(FLAG_CONCAVE)) != uint(0))
-                            dist = -dist;
-                           
-                        if((flags & uint(FLAG_CONCAVE)) != uint(0))
+                        if((flags & FLAG_INVERSE) != 0)
                             dist = -dist;
                             
                         float abs_dist = abs(dist);
                         vec4 out_color = color;
-                        if((flags & uint(FLAG_OKLAB)) != uint(0))
+                        if((flags & FLAG_OKLAB) != 0)
                             out_color.xyz = oklab_to_linear(out_color.xyz);
                             
                         float alpha_factor = min(-dist/(aa_threshold + 0.0000001), 1);
@@ -432,9 +648,10 @@ public class Main {
                     }
                     """,
                     """
-                    #define FLAG_CONCAVE    1
-                    #define FLAG_SOLID      2
-                    #define FLAG_OKLAB      4
+                    #define FLAG_BEZIER     1
+                    #define FLAG_CIRCLE     2
+                    #define FLAG_INVERSE    4
+                    #define FLAG_OKLAB      8
                     
                     vec3 linear_to_srgb(vec3 linearRGB)
                     {
@@ -713,7 +930,7 @@ public class Main {
     }
 
     //===================== Colors =====================
-    public static class Colorspace {
+    public static final class Colorspace {
         public float x; //r
         public float y; //g
         public float z; //b
