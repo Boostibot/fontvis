@@ -22,11 +22,13 @@ import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.system.MemoryUtil.*;
 import static java.util.Arrays.*;
 
+import java.awt.*;
 import java.lang.Math;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
+import java.util.ArrayList;
 import java.util.Arrays;
 
 import org.joml.*;
@@ -57,6 +59,11 @@ public class Main {
     }
 
     private void run() {
+        ArrayList<Font_Parser.Font_Log> logs = new ArrayList<>();
+        Font_Parser.Font font = Font_Parser.parse_load("/home/boosti/repos/vector_graphics/assets/fonts/Roboto/Roboto-Black.ttf", logs);
+        if(font == null || font.glyphs == null)
+            throw new IllegalStateException("Unable to Read font file");
+
         if (!glfwInit())
             throw new IllegalStateException("Unable to initialize GLFW");
 
@@ -137,6 +144,13 @@ public class Main {
 
         Quadratic_Bezier_Render bezier_render = new Quadratic_Bezier_Render(64*MB);
         Quadratic_Bezier_Buffer bezier_buffer = new Quadratic_Bezier_Buffer(64*MB);
+        Quadratic_Bezier_Buffer glyph_buffer = new Quadratic_Bezier_Buffer(4*MB);
+        glyph_buffer.grows = false;
+//        Font_Parser.Glyph glyph = font.glyphs.get("X".codePointAt(0));
+//        System.out.println(STR."\{glyph.points_on_curve.}");
+//        glyph_buffer.submit_glyph_contour(glyph, 1.0f/font.units_per_em, 0.01f, 0x0000FF, true, null);
+
+        glyph_buffer.submit_text_countour(font, "w", 1.0f/font.units_per_em, 0.05f, 0.05f, 1, 0x80FFFFFF, null);
 
         Matrix4f view_matrix = new Matrix4f();
         Matrix3f transf_matrix = new Matrix3f();
@@ -193,15 +207,31 @@ public class Main {
                 glClear(GL_COLOR_BUFFER_BIT);
 
                 double t = glfwGetTime();
-                double t1 = t + 1;
 
+//                model_matrix.identity().m10((float) sin(t));
+//                bezier_render.aa_threshold = 10;
 //                transf_matrix.identity().m10((float) sin(t));
-                bezier_buffer.submit_circle(0, 0, 1, 0xFF0000, 0x00FF00, 0xFF0000, Quadratic_Bezier_Buffer.FLAG_OKLAB, null);
-                bezier_buffer.submit_rounded_rectangle(0, 0, 1.5f, 0.7f, (float) (sin(t)*sin(t)*0.5), 0x33FA57, null);
 
-                model_matrix.identity().m10((float) sin(t));
+//                glyph_buffer.submit_line((float) cos(t), (float) sin(t) -1f, (float) cos(t), (float) -sin(t) + 1f, 0.01f, 0x8000FF00, true, transf_matrix);
+                if(false)
+                {
+                    bezier_buffer.submit_circle(0, 0, 1, 0xFF0000, 0x00FF00, 0xFF0000, Quadratic_Bezier_Buffer.FLAG_OKLAB, null);
+                    bezier_buffer.submit_rounded_rectangle(0, 0, 1.5f, 0.7f, (float) (sin(t)*sin(t)*0.5), 0x33FA57, null);
+
+                    bezier_buffer.submit_bezier_or_triangle(
+                        0, 1, 0xFF0000,
+                        1, 1, 0x00FF00,
+                        0, -1, 0x0000FF,
+                        Quadratic_Bezier_Buffer.FLAG_OKLAB | Quadratic_Bezier_Buffer.FLAG_BEZIER, null
+                    );
+                }
+
+//                bezier_buffer.submit_line(0, 0, 1, 1, 0.05f, 0xFFFFFF, true, null);
                 bezier_render.render(model_matrix, view_matrix, bezier_buffer);
+
+                bezier_render.render(model_matrix, view_matrix, glyph_buffer);
                 bezier_buffer.reset();
+//                glyph_buffer.reset();
 
                 glfwSwapBuffers(window);
             }
@@ -248,7 +278,6 @@ public class Main {
             }
             assert buffer != null;
         }
-
 
         public void submit(float x1, float y1, float u1, float v1, int color1,
                            float x2, float y2, float u2, float v2, int color2,
@@ -361,6 +390,7 @@ public class Main {
                 flags, transform_or_null
             );
         }
+
 
         public void submit_rectangle(float x, float y, float width, float height, int color, Matrix3f transform_or_null)
         {
@@ -508,6 +538,314 @@ public class Main {
                         0, transform_or_null
                     );
                 }
+            }
+        }
+
+        public void submit_line(float x1, float y1, float x2, float y2, float width, int color, Matrix3f transform_or_null)
+        {
+            float w2 = width/2;
+            float perpend_x = -(y2 - y1);
+            float perpend_y = x2 - x1;
+            float perpend_norm = (float) Math.sqrt(perpend_x*perpend_x + perpend_y*perpend_y);
+            float scaled_perpend_x = perpend_x*w2/perpend_norm;
+            float scaled_perpend_y = perpend_y*w2/perpend_norm;
+
+            float begin_top_x = x1 + scaled_perpend_x;
+            float begin_top_y = y1 + scaled_perpend_y;
+            float begin_bot_x = x1 - scaled_perpend_x;
+            float begin_bot_y = y1 - scaled_perpend_y;
+
+            float end_top_x = x2 + scaled_perpend_x;
+            float end_top_y = y2 + scaled_perpend_y;
+            float end_bot_x = x2 - scaled_perpend_x;
+            float end_bot_y = y2 - scaled_perpend_y;
+
+            //submit triangles
+            submit(
+                begin_top_x, begin_top_y, 0, 0, color,
+                begin_bot_x, begin_bot_y, 0, 0, color,
+                end_top_x, end_top_y, 0, 0, color,
+                0, transform_or_null
+            );
+            submit(
+                end_top_x, end_top_y, 0, 0, color,
+                begin_bot_x, begin_bot_y, 0, 0, color,
+                end_bot_x, end_bot_y, 0, 0, color,
+                0, transform_or_null
+            );
+        }
+
+        public static int MOD(int val, int range)
+        {
+            return (((val) % (range) + (range)) % (range));
+        }
+
+
+        public static float intersect_lines(
+            float dir1x, float dir1y, float off1x, float off1y,
+            float dir2x, float dir2y, float off2x, float off2y)
+        {
+            float Bx = off2x - off1x;
+            float By = off2y - off1y;
+
+            float num = By*dir2x - Bx*dir2y;
+            float den = dir2x*dir1y - dir2y*dir1x;
+
+            if(den == 0)
+                return Float.POSITIVE_INFINITY;
+            else
+                return num/den;
+        }
+
+        public static float hypot(float a, float b)
+        {
+            return (float) Math.sqrt(a*a + b*b);
+        }
+
+        static final class Inset
+        {
+            float x1;
+            float y1;
+
+            float x2;
+            float y2;
+        }
+
+        static Inset[] SUMBIT_GLYPH_INSETS = {new Inset(), new Inset()};
+        public void submit_glyph_contour(Font_Parser.Glyph glyph, float scale, float width, int color, boolean rounded_joints, Matrix3f transform_or_null)
+        {
+            assert glyph.points_x.length == glyph.points_y.length;
+            assert glyph.points_x.length == glyph.points_on_curve.length;
+
+            float r = width/2;
+            assert glyph.contour_end_indices.length > 0;
+            for(int j = 0; j < glyph.contour_end_indices.length; j++)
+            {
+                int i_start = j == 0 ? 0 : glyph.contour_end_indices[j - 1] + 1;
+                int i_end = glyph.contour_end_indices[j];
+                int range = i_end - i_start;
+                if(range <= 1)
+                    continue;
+
+                int prev = i_end;
+                int curr = i_start;
+                int next = i_start + 1;
+
+                for(int i = 0; i <= range + 1; i++)
+                {
+                    float x1 = glyph.points_x[prev]*scale;
+                    float y1 = glyph.points_y[prev]*scale;
+                    float x2 = glyph.points_x[curr]*scale;
+                    float y2 = glyph.points_y[curr]*scale;
+                    float x3 = glyph.points_x[next]*scale;
+                    float y3 = glyph.points_y[next]*scale;
+
+                    float ux = x1-x2;
+                    float uy = y1-y2;
+                    float vx = x3-x2;
+                    float vy = y3-y2;
+
+                    float u_mag = hypot(ux, uy);
+                    if(u_mag > 0)
+                    {
+                        ux /= u_mag;
+                        uy /= u_mag;
+                    }
+
+                    float v_mag = hypot(vx, vy);
+                    if(v_mag > 0)
+                    {
+                        vx /= v_mag;
+                        vy /= v_mag;
+                    }
+
+                    int inset_curr = i & 1;
+                    int inset_prev = (i+1) & 1;
+
+                    Inset new_inset = SUMBIT_GLYPH_INSETS[inset_curr];
+                    float similarity_threshold = 0.75f;
+
+                    float cut_corner_x = 0;
+                    float cut_corner_y = 0;
+                    boolean added_cut_corner = false;
+                    float perpend_x = -uy;
+                    float perpend_y = ux;
+                    float hx = ux + vx;
+                    float hy = uy + vy;
+                    float h_dot_perpend = hx*perpend_x + hy*perpend_y;
+                    float u_dot_v = ux*vx + uy*vy;
+                    if(-0.0001f < h_dot_perpend && h_dot_perpend < 0.0001f)
+                    {
+                        new_inset.x1 = x2 + perpend_x*r;
+                        new_inset.y1 = y2 + perpend_y*r;
+                        new_inset.x2 = x2 - perpend_x*r;
+                        new_inset.y2 = y2 - perpend_y*r;
+                    }
+                    else
+                    {
+                        float beta = r/h_dot_perpend;
+                        new_inset.x1 = x2 + hx*beta;
+                        new_inset.y1 = y2 + hy*beta;
+                        new_inset.x2 = x2 - hx*beta;
+                        new_inset.y2 = y2 - hy*beta;
+
+                        if(u_dot_v > similarity_threshold)
+                        {
+                            float h_perp_x = -hy;
+                            float h_perp_y = hx;
+
+                            float h_mag = hypot(hx,hy);
+                            h_perp_x /= h_mag;
+                            h_perp_y /= h_mag;
+
+                            float h_start_x = x2 - hx/h_mag*r;
+                            float h_start_y = y2 - hy/h_mag*r;
+
+                            float intersect = intersect_lines(
+                                h_perp_x, h_perp_y, h_start_x, h_start_y,
+                                ux, uy, new_inset.x1, new_inset.y1
+                            );
+
+                            float intersect1_x = h_start_x + h_perp_x*intersect;
+                            float intersect1_y = h_start_y + h_perp_y*intersect;
+
+                            float intersect2_x = h_start_x + -h_perp_x*intersect;
+                            float intersect2_y = h_start_y + -h_perp_y*intersect;
+
+                            if(i > 0)
+                            {
+                                submit(
+                                    intersect1_x, intersect1_y, 0, 0, color,
+                                    new_inset.x2, new_inset.y2, 0, 0, color,
+                                    intersect2_x, intersect2_y, 0, 0, color,
+                                    0, transform_or_null
+                                );
+                            }
+
+                            new_inset.x1 = intersect1_x;
+                            new_inset.y1 = intersect1_y;
+                            cut_corner_x = intersect2_x;
+                            cut_corner_y = intersect2_y;
+                            added_cut_corner = true;
+                        }
+                    }
+
+                    if(i > 0)
+                    {
+                        float begin_top_x = SUMBIT_GLYPH_INSETS[inset_prev].x1;
+                        float begin_top_y = SUMBIT_GLYPH_INSETS[inset_prev].y1;
+                        float begin_bot_x = SUMBIT_GLYPH_INSETS[inset_prev].x2;
+                        float begin_bot_y = SUMBIT_GLYPH_INSETS[inset_prev].y2;
+
+                        float end_top_x = SUMBIT_GLYPH_INSETS[inset_curr].x1;
+                        float end_top_y = SUMBIT_GLYPH_INSETS[inset_curr].y1;
+                        float end_bot_x = SUMBIT_GLYPH_INSETS[inset_curr].x2;
+                        float end_bot_y = SUMBIT_GLYPH_INSETS[inset_curr].y2;
+
+                        submit_line(x1, y1, x2, y2, 0.005f, 0xFFFFFF, transform_or_null);
+                        submit_line(begin_top_x, begin_top_y, x1, y1, 0.005f, 0xFFFF, transform_or_null);
+
+                        submit(
+                                begin_top_x, begin_top_y, 0, 0, color,
+                                begin_bot_x, begin_bot_y, 0, 0, color,
+                                end_top_x, end_top_y, 0, 0, color,
+                                0, transform_or_null
+                        );
+                        submit(
+                                end_top_x, end_top_y, 0, 0, color,
+                                begin_bot_x, begin_bot_y, 0, 0, color,
+                                end_bot_x, end_bot_y, 0, 0, color,
+                                0, transform_or_null
+                        );
+                    }
+                    else
+                        submit_circle(x2, y2, 0.02f, 0xFF, transform_or_null);
+
+                    if(added_cut_corner)
+                    {
+                        SUMBIT_GLYPH_INSETS[inset_curr].x1 = cut_corner_x;
+                        SUMBIT_GLYPH_INSETS[inset_curr].y1 = cut_corner_y;
+                    }
+
+                    prev = curr;
+                    curr = next;
+                    next = curr + 1;
+                    if(next > i_end)
+                        next = i_start;
+                }
+            }
+
+        }
+
+
+        public static float bezier(float p1, float p2, float p3, float t)
+        {
+            return t*t*p1 + t*(1-t)*p2 + (1-t)*(1-t)*p3;
+        }
+
+        public static float bezier_derivative(float p1, float p2, float p3, float t)
+        {
+            return (p2 - 2*p3) + 2*t*(p1 - p2 - p3);
+        }
+
+        public static float bezier_second_derivative(float p1, float p2, float p3)
+        {
+            return 2*(p1 - p2 - p3);
+        }
+
+        public static float bezier_curvature(float x1, float y1, float x2, float y2, float x3, float y3, float t)
+        {
+            float dx = bezier_derivative(x1, x2, x3, t);
+            float dy = bezier_derivative(y1, y2, y3, t);
+            float ddx = bezier_second_derivative(x1, x2, x3);
+            float ddy = bezier_second_derivative(y1, y2, y3);
+
+            float kappa = (dx*ddy - ddx*dy)/(float) Math.pow(dx*dx + dy*dy, 1.5);
+            return kappa;
+        }
+
+        public void submit_bezier_contour(float x1, float y1, float x2, float y2, float x3, float y3, float width, int color, boolean rounded_joints, int min_segments, int max_segments, Matrix3f transform_or_null)
+        {
+            float r = width/2;
+            float prev_x = x1;
+            float prev_y = y1;
+            if(rounded_joints)
+                submit_circle(prev_x, prev_y, r, color, transform_or_null);
+
+            for(int i = 0; i < min_segments; i++)
+            {
+                float t = (float) (i + 1)/min_segments;
+
+                float curr_x = bezier(x1, x2, x3, t);
+                float curr_y = bezier(y1, y2, y3, t);
+
+                submit_line(prev_x, prev_y, curr_x, curr_y, width, color, transform_or_null);
+                submit_circle(curr_x, curr_y, r, color, transform_or_null);
+
+                prev_x = curr_x;
+                prev_y = curr_y;
+            }
+        }
+
+        static Matrix3f SUBMIT_TEXT_COUBNTOUR_TEMP_MATRIX = new Matrix3f();
+        public void submit_text_countour(Font_Parser.Font font, String text, float scale, float width, float spacing_flat, float spacing_boost, int color, Matrix3f transform_or_null)
+        {
+            int i = 0;
+            SUBMIT_TEXT_COUBNTOUR_TEMP_MATRIX.identity();
+            int text_position = 0;
+            for(int c : text.codePoints().toArray()){
+                Font_Parser.Glyph glyph = font.glyphs.getOrDefault(c, font.missing_glyph);
+                if(glyph == font.missing_glyph)
+                    System.err.println(STR."Couldnt render unicode character '\{Character.toChars(c)}' using not found glyph");
+
+//                Font_Parser.Glyph glyph = font.missing_glyph;
+                SUBMIT_TEXT_COUBNTOUR_TEMP_MATRIX.m20 = i*spacing_flat + text_position*scale*spacing_boost;
+                if(transform_or_null != null)
+                    SUBMIT_TEXT_COUBNTOUR_TEMP_MATRIX.mulLocal(transform_or_null);
+
+                submit_glyph_contour(glyph, scale, width, color, true, SUBMIT_TEXT_COUBNTOUR_TEMP_MATRIX);
+                text_position += glyph.advance_width;
+                i += 1;
             }
         }
 
@@ -771,18 +1109,32 @@ public class Main {
 
     public static void test_rgba_hex_conv(int hex)
     {
-        byte r = hex_r(hex);
-        byte g = hex_g(hex);
-        byte b = hex_b(hex);
-        byte a = hex_a(hex);
+        byte r = Colorspace.hex_r(hex);
+        byte g = Colorspace.hex_g(hex);
+        byte b = Colorspace.hex_b(hex);
+        byte a = Colorspace.hex_a(hex);
 
         int back = Colorspace.rgba_to_hex(r,g,b,a);
         assert back == hex;
     }
 
-    public static boolean setUniform(int program, CharSequence name, float val)
+    public static int glGetUniformAndLog(int program, CharSequence name, CharSequence type)
     {
         int location = glGetUniformLocation(program, name);
+        if(location == -1)
+        {
+            if(type.length() > 0)
+                System.err.println(STR."program \{program} couldnt find uniform \{type} '\{name}'");
+            else
+                System.err.println(STR."program \{program} couldnt find uniform '\{name}'");
+        }
+
+        return location;
+    }
+
+    public static boolean setUniform(int program, CharSequence name, float val)
+    {
+        int location = glGetUniformAndLog(program, name, "float");
         if(location == -1)
             return false;
 
@@ -792,7 +1144,7 @@ public class Main {
 
     public static boolean setUniform(int program, CharSequence name, Vector3f val)
     {
-        int location = glGetUniformLocation(program, name);
+        int location = glGetUniformAndLog(program, name, "vec3");
         if(location == -1)
             return false;
 
@@ -927,141 +1279,6 @@ public class Main {
             throw new AssertionError("Could not link program");
         }
         return program;
-    }
-
-    //===================== Colors =====================
-    public static final class Colorspace {
-        public float x; //r
-        public float y; //g
-        public float z; //b
-        public float a; //alpha
-
-        public static int ucast(byte val)
-        {
-            return (int) val & 0xFF;
-        }
-
-        public static int rgba_to_hex(byte r, byte g, byte b, byte a)
-        {
-            return ucast((byte)(255 - a)) << 24 | ucast(r) << 16 | ucast(g) << 8 | ucast(b);
-        }
-
-        public static int rgba_to_hex(float r, float g, float b, float a)
-        {
-            return rgba_to_hex((byte)(int) (r*255), (byte)(int) (g*255), (byte)(int) (b*255), (byte)(int) (a*255));
-        }
-
-        public static double lin_to_srgb(double c)
-        {
-            return c >= 0.0031308 ? 1.055 * Math.pow(c, 1 / 2.4) - 0.055 : 12.92 * c;
-        }
-
-        public static double srgb_to_lin(double c)
-        {
-            return c >= 0.04045 ? Math.pow((c + 0.055) / 1.055, 2.4) : c / 12.92;
-        }
-
-        public Colorspace(float _x, float _z, float _y, float _a)
-        {
-            x = _x;
-            y = _y;
-            z = _z;
-            a = _a;
-        }
-
-        public Colorspace(float _x, float _z, float _y)
-        {
-            x = _x;
-            y = _y;
-            z = _z;
-            a = 1;
-        }
-
-        public Colorspace(int hex)
-        {
-            x = hex_r(hex)/255f;
-            y = hex_g(hex)/255f;
-            z = hex_b(hex)/255f;
-            a = hex_a(hex)/255f;
-        }
-
-        public int to_hex()
-        {
-            return rgba_to_hex(x, y, z, a);
-        }
-
-        public Colorspace lin_to_srgb()
-        {
-            x = (float) lin_to_srgb(x);
-            y = (float) lin_to_srgb(y);
-            z = (float) lin_to_srgb(z);
-            return this;
-        }
-
-        public Colorspace srgb_to_lin()
-        {
-            x = (float) srgb_to_lin(x);
-            y = (float) srgb_to_lin(y);
-            z = (float) srgb_to_lin(z);
-            return this;
-        }
-
-        public Colorspace lin_to_oklab()
-        {
-            float l = 0.4122214708f*x + 0.5363325363f*y + 0.0514459929f*z;
-            float m = 0.2119034982f*x + 0.6806995451f*y + 0.1073969566f*z;
-            float s = 0.0883024619f*x + 0.2817188376f*y + 0.6299787005f*z;
-
-            float l_ = (float) Math.cbrt(l);
-            float m_ = (float) Math.cbrt(m);
-            float s_ = (float) Math.cbrt(s);
-
-            x = 0.2104542553f*l_ + 0.7936177850f*m_ - 0.0040720468f*s_;
-            y = 1.9779984951f*l_ - 2.4285922050f*m_ + 0.4505937099f*s_;
-            z = 0.0259040371f*l_ + 0.7827717662f*m_ - 0.8086757660f*s_;
-            return this;
-        }
-
-        public Colorspace oklab_to_lin()
-        {
-            float l_ = 1*x + 0.3963377774f*y + 0.2158037573f*z;
-            float m_ = 1*x - 0.1055613458f*y - 0.0638541728f*z;
-            float s_ = 1*x - 0.0894841775f*y - 1.2914855480f*z;
-
-            float l = l_*l_*l_;
-            float m = m_*m_*m_;
-            float s = s_*s_*s_;
-
-            x = +4.0767416621f*l - 3.3077115913f*m + 0.2309699292f*s;
-            y = -1.2684380046f*l + 2.6097574011f*m - 0.3413193965f*s;
-            z = -0.0041960863f*l - 0.7034186147f*m + 1.7076147010f*s;
-            return this;
-        }
-    }
-
-    public static byte hex_t(int hex)
-    {
-        return (byte) (hex >> 24);
-    }
-
-    public static byte hex_a(int hex)
-    {
-        return (byte) (255 - (byte) (hex >> 24));
-    }
-
-    public static byte hex_r(int hex)
-    {
-        return (byte) (hex >> 16);
-    }
-
-    public static byte hex_g(int hex)
-    {
-        return (byte) (hex >> 8);
-    }
-
-    public static byte hex_b(int hex)
-    {
-        return (byte) (hex);
     }
 
     public static void main(String[] args) {
