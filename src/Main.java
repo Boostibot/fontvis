@@ -150,7 +150,7 @@ public class Main {
 //        System.out.println(STR."\{glyph.points_on_curve.}");
 //        glyph_buffer.submit_glyph_contour(glyph, 1.0f/font.units_per_em, 0.01f, 0x0000FF, true, null);
 
-        glyph_buffer.submit_text_countour(font, "w", 1.0f/font.units_per_em, 0.05f, 0.05f, 1, 0x80FFFFFF, null);
+        glyph_buffer.submit_text_countour(font, "kruw", 1.0f/font.units_per_em, 0.05f, 0.05f, 1, 0x80FFFFFF, null);
 
         Matrix4f view_matrix = new Matrix4f();
         Matrix3f transf_matrix = new Matrix3f();
@@ -602,16 +602,389 @@ public class Main {
             return (float) Math.sqrt(a*a + b*b);
         }
 
-        static final class Inset
+        public static boolean is_near(float a, float b, double epsilon)
         {
-            float x1;
-            float y1;
-
-            float x2;
-            float y2;
+            return Math.abs(a - b) < epsilon;
         }
 
-        static Inset[] SUMBIT_GLYPH_INSETS = {new Inset(), new Inset()};
+        public static boolean is_near(float a, float b)
+        {
+            return is_near(a, b, 1e-7);
+        }
+
+        static final class Line_Connection
+        {
+            float u_side_x1;
+            float u_side_y1;
+            float u_side_x2;
+            float u_side_y2;
+
+            float v_side_x1;
+            float v_side_y1;
+            float v_side_x2;
+            float v_side_y2;
+
+            boolean has_primitive;
+            boolean has_circle; //circles uvs are circle_x/r
+            boolean undetermined;
+            //if undetermined == false the ordering of u_side_x1 should be paired with v_side_x1
+            // and so on. If undetermined == true each point from one side should be paired with the
+            // most likely point from the other side. This is obtained by comparing the connected point direction
+            // with the direction of the line segment. The point combination most similar is selected.
+
+            float primitive_x1;
+            float primitive_y1;
+            float primitive_x2;
+            float primitive_y2;
+            float primitive_x3;
+            float primitive_y3;
+
+            float r;
+            float circle_x1;
+            float circle_y1;
+            float circle_x2;
+            float circle_y2;
+            float circle_x3;
+            float circle_y3;
+        }
+
+        public static float LINE_CONNECTION_DEF_CUT_CORNER_THRESHOLD = 0.75f;
+        public static float LINE_CONNECTION_DEF_PERPEND_EPSILON = 0.00001f;
+        static Line_Connection calculate_line_connection(Line_Connection connection, float ux, float uy, float vx, float vy, float r, float sharp_corner_height, boolean do_rounded, float sharp_connection_threshold, float perpend_epsilon)
+        {
+            //Calculates how to join two line outlines with width=2r. This function only cares about directions of the
+            // segments and not the coordinates themselves. The directions of the connected lines are given by
+            // vectors `u` and `v`. h denotes the halfway vector which (because u and v are normalized) divides the angle
+            // between u and v in half.
+            //
+            //                  h=u+v        v
+            //                   ^      /    /    /
+            //                    \    /    /    /
+            //                     \  /    /    /
+            //                      \/    /    /
+            //        <------------- A   /    /     ^
+            //                        \ /    /      |
+            //      u <----------------0    /       | 2r
+            //                             /        |
+            //        <-------------------B         V
+            //
+            // A is shared across all connection styles while B differs/is represented by two points instead.
+            // If the angle between v and u is very small thus the corner is very sharp we use "cut corner".
+            // The angle of a=90 (sharp_corner_heightt = cos(a=90)) is here just for illustration as
+            // normally we cut at far narrower angles. We need to add additional triangle A,B,B' as shown on the picture.
+            //
+            //                           2r
+            //                       |<------>|
+            //                       |   |    |
+            //                       |   |    |
+            //                       |   |    |
+            //        <------------- A--_|_   |
+            //        ^               \  | '--B'
+            //    2r  |------------------0   /
+            //        V                 \  /
+            //        <------------------B
+            //
+            // Lastly we optionally do rounded corners. The lines are connected by a circle with center in the origin.
+            // We need to add additional circle segment contained within a triangle as shown on the picture.
+            //
+            //                           2r
+            //                       |<------>|
+            //                       |   |    |
+            //                       |   |    |
+            //                       |   |    |
+            //        <------------- A--_|_   |
+            //        ^               \  | ^--|-
+            //    2r  |------------------0    | ^---B'
+            //        V                \     ./    /
+            //        <----------------|----"    /
+            //                          \     /
+            //                          |  /
+            //                           B
+
+            assert is_near(hypot(ux, uy), 1); //Needs to be normalized
+            assert is_near(hypot(vx, vy), 1); //Needs to be normalized
+
+            final float PERPEND_EPSILON = 0.0001f;
+
+            float u_dot_v = ux*vx + uy*vy;
+
+            //perpendicular
+            float pux = -uy;
+            float puy = ux;
+            float pvx = -vy;
+            float pvy = vx;
+
+            connection.r = r;
+
+            float v_dot_pu = vx*pux + vy*puy;
+
+            //If is nearly straight (ie the corner barely exists) dont bother with anything fancy and
+            // just place A and B along the perpendicular of u
+            // (and also of v since they are very similar in this case)
+            if(abs(v_dot_pu) < perpend_epsilon)
+            {
+                connection.u_side_x1 = -pux*r;
+                connection.u_side_y1 = -puy*r;
+                connection.u_side_x2 = pux*r;
+                connection.u_side_y2 = puy*r;
+
+                connection.v_side_x1 = connection.u_side_x1;
+                connection.v_side_y1 = connection.u_side_y1;
+                connection.v_side_x2 = connection.u_side_x2;
+                connection.v_side_y2 = connection.u_side_y2;
+                connection.has_primitive = false;
+                connection.has_circle = false;
+                connection.undetermined = true;
+            }
+            else
+            {
+                connection.undetermined = false;
+                float h_mag = hypot(ux + vx, uy + vy);
+                float hx = (ux + vx)/h_mag;
+                float hy = (uy + vy)/h_mag;
+
+                float phx = -hy;
+                float phy = hx;
+                float h_dot_pu = hx*pux + hy*puy;
+
+                //The position of sharp connection point on the inside of the bend
+                // is shared among all connection styles
+                float beta = r/h_dot_pu;
+                if(Float.isInfinite(beta))
+                    beta = 0;
+
+                float Ax = hx*beta;
+                float Ay = hy*beta;
+
+                //Rounded corner
+                if(do_rounded)
+                {
+                    final float RADIUS_TO_TRIANGLE_SIZE = 2;
+                    final float TANGENT_OF_30_DEGREES = 0.5773502691896257f;
+
+                    float max_triangle_size = RADIUS_TO_TRIANGLE_SIZE*r;
+                    float offset = abs(h_dot_pu*r);
+                    float triangle_height = max_triangle_size - offset;
+                    float triangle_width = triangle_height*TANGENT_OF_30_DEGREES;
+
+                    assert triangle_height > 0;
+                    assert triangle_width > 0;
+
+                    connection.has_circle = true;
+                    connection.circle_x1 = -max_triangle_size*hx;
+                    connection.circle_y1 = -max_triangle_size*hy;
+                    connection.circle_x2 = -offset*hx + triangle_width*phx;
+                    connection.circle_y2 = -offset*hy + triangle_width*phy;
+                    connection.circle_x3 = -offset*hx - triangle_width*phx;
+                    connection.circle_y3 = -offset*hy - triangle_width*phy;
+
+                    //Since is perpendicular depends on direction is required to make two cases.
+                    // Dont ask too much. This is more of a hack since I am too tired to think this really through.
+                    if(v_dot_pu < 0)
+                    {
+                        connection.u_side_x2 = pux*r;
+                        connection.u_side_y2 = puy*r;
+                        connection.u_side_x1 = -Ax;
+                        connection.u_side_y1 = -Ay;
+
+                        connection.v_side_x2 = -pvx*r;
+                        connection.v_side_y2 = -pvy*r;
+                        connection.v_side_x1 = -Ax;
+                        connection.v_side_y1 = -Ay;
+
+                        connection.has_primitive = true;
+                        connection.primitive_x1 = connection.u_side_x2;
+                        connection.primitive_y1 = connection.u_side_y2;
+                        connection.primitive_x2 = connection.v_side_x2;
+                        connection.primitive_y2 = connection.v_side_y2;
+                        connection.primitive_x3 = -Ax;
+                        connection.primitive_y3 = -Ay;
+                    }
+                    else
+                    {
+                        connection.u_side_x1 = -pux*r;
+                        connection.u_side_y1 = -puy*r;
+                        connection.u_side_x2 = Ax;
+                        connection.u_side_y2 = Ay;
+
+                        connection.v_side_x1 = pvx*r;
+                        connection.v_side_y1 = pvy*r;
+                        connection.v_side_x2 = Ax;
+                        connection.v_side_y2 = Ay;
+
+                        connection.has_primitive = true;
+                        connection.primitive_x1 = connection.u_side_x1;
+                        connection.primitive_y1 = connection.u_side_y1;
+                        connection.primitive_x2 = connection.v_side_x1;
+                        connection.primitive_y2 = connection.v_side_y1;
+                        connection.primitive_x3 = connection.v_side_x2;
+                        connection.primitive_y3 = connection.v_side_y2;
+                    }
+
+                    assert !Float.isNaN(connection.u_side_x2);
+                    assert !Float.isNaN(connection.u_side_x1);
+                    assert !Float.isNaN(connection.circle_x2);
+                    assert !Float.isNaN(connection.primitive_x3);
+                }
+                //Cut corner
+                else if(u_dot_v > sharp_connection_threshold)
+                {
+                    //Find such vector B on the outer boundary along the u vector
+                    // (that is B = A + gamma*u) so that its sharp_corner_height=s
+                    // distance along h from the origin. That is |proj_{-h} B| = s
+                    // s = B.-h / |h|. factor out gamma and calculate.
+                    // The same for B' using v instead of u.
+
+                    //u.h = u.(u+v) = u.u + u.v = 1 + u.v
+                    float u_dot_h = 1 + u_dot_v;
+                    float v_dot_h = 1 + u_dot_v;
+                    float u_gamma = (-beta - sharp_corner_height)/u_dot_h;
+                    float v_gamma = (-beta - sharp_corner_height)/v_dot_h;
+
+                    connection.u_side_x1 = Ax + ux*u_gamma;
+                    connection.u_side_y1 = Ay + uy*u_gamma;
+                    connection.u_side_x2 = -Ax;
+                    connection.u_side_y2 = -Ay;
+
+                    connection.v_side_x1 = Ax + vx*v_gamma;
+                    connection.v_side_y1 = Ay + vy*v_gamma;
+                    connection.v_side_x2 = -Ax;
+                    connection.v_side_y2 = -Ay;
+
+                    connection.has_circle = false;
+                    connection.has_primitive = true;
+                    connection.primitive_x1 = connection.v_side_x1;
+                    connection.primitive_y1 = connection.v_side_y1;
+                    connection.primitive_x2 = connection.u_side_x1;
+                    connection.primitive_y2 = connection.u_side_y1;
+                    connection.primitive_x3 = -Ax;
+                    connection.primitive_y3 = -Ay;
+
+                    //no need to set uvs because is simple triangle
+                }
+                //Sharp corner
+                else
+                {
+                    connection.u_side_x1 = Ax;
+                    connection.u_side_y1 = Ay;
+                    connection.u_side_x2 = -Ax;
+                    connection.u_side_y2 = -Ay;
+
+                    connection.v_side_x1 = Ax;
+                    connection.v_side_y1 = Ay;
+                    connection.v_side_x2 = -Ax;
+                    connection.v_side_y2 = -Ay;
+                    connection.has_primitive = false;
+                    connection.has_circle = false;
+                }
+            }
+
+            return connection;
+        }
+
+        static Line_Connection calculate_line_connection(Line_Connection connection, float x1, float y1, float x2, float y2, float x3, float y3, float r, boolean do_rounded)
+        {
+            float ux = x1-x2;
+            float uy = y1-y2;
+            float vx = x3-x2;
+            float vy = y3-y2;
+
+            float u_mag = hypot(ux, uy);
+            if(u_mag > 0)
+            {
+                ux /= u_mag;
+                uy /= u_mag;
+            }
+
+            float v_mag = hypot(vx, vy);
+            if(v_mag > 0)
+            {
+                vx /= v_mag;
+                vy /= v_mag;
+            }
+
+            return calculate_line_connection(connection, ux, uy, vx, vy, r, r, do_rounded, LINE_CONNECTION_DEF_CUT_CORNER_THRESHOLD, LINE_CONNECTION_DEF_PERPEND_EPSILON);
+        }
+
+        public void submit_connected_line(Line_Connection from, Line_Connection to, float from_x, float from_y, float to_x, float to_y, int color, Matrix3f transform_or_null)
+        {
+            if(to.has_primitive)
+            {
+                submit(
+                    to_x + to.primitive_x1, to_y + to.primitive_y1, 0, 0, color,
+                    to_x + to.primitive_x2, to_y + to.primitive_y2, 0, 0, color,
+                    to_x + to.primitive_x3, to_y + to.primitive_y3, 0, 0, color,
+                    0, transform_or_null
+                );
+            }
+
+            float r = to.r;
+            if(to.has_circle)
+            {
+                submit(
+                    to_x + to.circle_x1, to_y + to.circle_y1, to.circle_x1/r, to.circle_y1/r, color,
+                    to_x + to.circle_x2, to_y + to.circle_y2, to.circle_x2/r, to.circle_y2/r, color,
+                    to_x + to.circle_x3, to_y + to.circle_y3, to.circle_x3/r, to.circle_y3/r, color,
+                    FLAG_CIRCLE, transform_or_null
+                );
+            }
+
+            submit_line(from_x, from_y, to_x, to_y, 0.005f, 0xFFFFFF, transform_or_null);
+
+            float begin_top_x = from_x + from.v_side_x1;
+            float begin_top_y = from_y + from.v_side_y1;
+            float begin_bot_x = from_x + from.v_side_x2;
+            float begin_bot_y = from_y + from.v_side_y2;
+
+            float end_top_x = to_x + to.u_side_x1;
+            float end_top_y = to_y + to.u_side_y1;
+            float end_bot_x = to_x + to.u_side_x2;
+            float end_bot_y = to_y + to.u_side_y2;
+
+            //Ignore undeterminacy for now since its not needed
+            if(false)
+            if(to.undetermined || from.undetermined)
+            {
+                float true_dirx = to_x - from_x;
+                float true_diry = to_y - from_y;
+                float true_dir_mag = hypot(true_dirx, true_diry);
+
+                float dir1x = end_top_x - begin_top_x;
+                float dir1y = end_top_y - begin_top_y;
+                float dir1_mag = hypot(dir1x, dir1y);
+
+                float dir2x = end_bot_x - begin_top_x;
+                float dir2y = end_bot_y - begin_top_y;
+                float dir2_mag = hypot(dir2x, dir2y);
+
+                float similarity1 = (true_dirx*dir1x + true_diry*dir1y)/(true_dir_mag*dir1_mag);
+                float similarity2 = (true_dirx*dir2x + true_diry*dir2y)/(true_dir_mag*dir2_mag);
+                if(similarity1 < similarity2)
+                {
+                    float tempx = end_top_x;
+                    float tempy = end_top_y;
+                    end_top_x = end_bot_x;
+                    end_top_y = end_bot_y;
+                    end_bot_x = tempx;
+                    end_bot_y = tempy;
+                }
+            }
+
+            submit(
+                begin_top_x, begin_top_y, 0, 0, color,
+                begin_bot_x, begin_bot_y, 0, 0, color,
+                end_top_x, end_top_y, 0, 0, color,
+                0, transform_or_null
+            );
+            submit(
+                end_top_x, end_top_y, 0, 0, color,
+                begin_bot_x, begin_bot_y, 0, 0, color,
+                end_bot_x, end_bot_y, 0, 0, color,
+                0, transform_or_null
+            );
+        }
+
+        static Line_Connection[] SUMBIT_GLYPH_CONNECTIONS = {new Line_Connection(), new Line_Connection()};
         public void submit_glyph_contour(Font_Parser.Glyph glyph, float scale, float width, int color, boolean rounded_joints, Matrix3f transform_or_null)
         {
             assert glyph.points_x.length == glyph.points_y.length;
@@ -630,7 +1003,6 @@ public class Main {
                 int prev = i_end;
                 int curr = i_start;
                 int next = i_start + 1;
-
                 for(int i = 0; i <= range + 1; i++)
                 {
                     float x1 = glyph.points_x[prev]*scale;
@@ -640,132 +1012,17 @@ public class Main {
                     float x3 = glyph.points_x[next]*scale;
                     float y3 = glyph.points_y[next]*scale;
 
-                    float ux = x1-x2;
-                    float uy = y1-y2;
-                    float vx = x3-x2;
-                    float vy = y3-y2;
-
-                    float u_mag = hypot(ux, uy);
-                    if(u_mag > 0)
-                    {
-                        ux /= u_mag;
-                        uy /= u_mag;
-                    }
-
-                    float v_mag = hypot(vx, vy);
-                    if(v_mag > 0)
-                    {
-                        vx /= v_mag;
-                        vy /= v_mag;
-                    }
-
-                    int inset_curr = i & 1;
                     int inset_prev = (i+1) & 1;
+                    int inset_curr = i & 1;
 
-                    Inset new_inset = SUMBIT_GLYPH_INSETS[inset_curr];
-                    float similarity_threshold = 0.75f;
-
-                    float cut_corner_x = 0;
-                    float cut_corner_y = 0;
-                    boolean added_cut_corner = false;
-                    float perpend_x = -uy;
-                    float perpend_y = ux;
-                    float hx = ux + vx;
-                    float hy = uy + vy;
-                    float h_dot_perpend = hx*perpend_x + hy*perpend_y;
-                    float u_dot_v = ux*vx + uy*vy;
-                    if(-0.0001f < h_dot_perpend && h_dot_perpend < 0.0001f)
-                    {
-                        new_inset.x1 = x2 + perpend_x*r;
-                        new_inset.y1 = y2 + perpend_y*r;
-                        new_inset.x2 = x2 - perpend_x*r;
-                        new_inset.y2 = y2 - perpend_y*r;
-                    }
-                    else
-                    {
-                        float beta = r/h_dot_perpend;
-                        new_inset.x1 = x2 + hx*beta;
-                        new_inset.y1 = y2 + hy*beta;
-                        new_inset.x2 = x2 - hx*beta;
-                        new_inset.y2 = y2 - hy*beta;
-
-                        if(u_dot_v > similarity_threshold)
-                        {
-                            float h_perp_x = -hy;
-                            float h_perp_y = hx;
-
-                            float h_mag = hypot(hx,hy);
-                            h_perp_x /= h_mag;
-                            h_perp_y /= h_mag;
-
-                            float h_start_x = x2 - hx/h_mag*r;
-                            float h_start_y = y2 - hy/h_mag*r;
-
-                            float intersect = intersect_lines(
-                                h_perp_x, h_perp_y, h_start_x, h_start_y,
-                                ux, uy, new_inset.x1, new_inset.y1
-                            );
-
-                            float intersect1_x = h_start_x + h_perp_x*intersect;
-                            float intersect1_y = h_start_y + h_perp_y*intersect;
-
-                            float intersect2_x = h_start_x + -h_perp_x*intersect;
-                            float intersect2_y = h_start_y + -h_perp_y*intersect;
-
-                            if(i > 0)
-                            {
-                                submit(
-                                    intersect1_x, intersect1_y, 0, 0, color,
-                                    new_inset.x2, new_inset.y2, 0, 0, color,
-                                    intersect2_x, intersect2_y, 0, 0, color,
-                                    0, transform_or_null
-                                );
-                            }
-
-                            new_inset.x1 = intersect1_x;
-                            new_inset.y1 = intersect1_y;
-                            cut_corner_x = intersect2_x;
-                            cut_corner_y = intersect2_y;
-                            added_cut_corner = true;
-                        }
-                    }
+                    Line_Connection prev_connection = SUMBIT_GLYPH_CONNECTIONS[inset_prev];
+                    Line_Connection curr_connection = SUMBIT_GLYPH_CONNECTIONS[inset_curr];
+                    calculate_line_connection(curr_connection, x1, y1, x2, y2, x3, y3, r, rounded_joints);
 
                     if(i > 0)
-                    {
-                        float begin_top_x = SUMBIT_GLYPH_INSETS[inset_prev].x1;
-                        float begin_top_y = SUMBIT_GLYPH_INSETS[inset_prev].y1;
-                        float begin_bot_x = SUMBIT_GLYPH_INSETS[inset_prev].x2;
-                        float begin_bot_y = SUMBIT_GLYPH_INSETS[inset_prev].y2;
-
-                        float end_top_x = SUMBIT_GLYPH_INSETS[inset_curr].x1;
-                        float end_top_y = SUMBIT_GLYPH_INSETS[inset_curr].y1;
-                        float end_bot_x = SUMBIT_GLYPH_INSETS[inset_curr].x2;
-                        float end_bot_y = SUMBIT_GLYPH_INSETS[inset_curr].y2;
-
-                        submit_line(x1, y1, x2, y2, 0.005f, 0xFFFFFF, transform_or_null);
-                        submit_line(begin_top_x, begin_top_y, x1, y1, 0.005f, 0xFFFF, transform_or_null);
-
-                        submit(
-                                begin_top_x, begin_top_y, 0, 0, color,
-                                begin_bot_x, begin_bot_y, 0, 0, color,
-                                end_top_x, end_top_y, 0, 0, color,
-                                0, transform_or_null
-                        );
-                        submit(
-                                end_top_x, end_top_y, 0, 0, color,
-                                begin_bot_x, begin_bot_y, 0, 0, color,
-                                end_bot_x, end_bot_y, 0, 0, color,
-                                0, transform_or_null
-                        );
-                    }
+                        submit_connected_line(prev_connection, curr_connection, x1, y1, x2, y2, color, transform_or_null);
                     else
                         submit_circle(x2, y2, 0.02f, 0xFF, transform_or_null);
-
-                    if(added_cut_corner)
-                    {
-                        SUMBIT_GLYPH_INSETS[inset_curr].x1 = cut_corner_x;
-                        SUMBIT_GLYPH_INSETS[inset_curr].y1 = cut_corner_y;
-                    }
 
                     prev = curr;
                     curr = next;
@@ -804,6 +1061,7 @@ public class Main {
             return kappa;
         }
 
+        static Line_Connection[] SUMBIT_BEZIER_CONNECTIONS = {new Line_Connection(), new Line_Connection()};
         public void submit_bezier_contour(float x1, float y1, float x2, float y2, float x3, float y3, float width, int color, boolean rounded_joints, int min_segments, int max_segments, Matrix3f transform_or_null)
         {
             float r = width/2;
@@ -818,6 +1076,15 @@ public class Main {
 
                 float curr_x = bezier(x1, x2, x3, t);
                 float curr_y = bezier(y1, y2, y3, t);
+
+                int inset_prev = (i+1) & 1;
+                int inset_curr = i & 1;
+
+                Line_Connection prev_connection = SUMBIT_BEZIER_CONNECTIONS[inset_prev];
+                Line_Connection curr_connection = SUMBIT_BEZIER_CONNECTIONS[inset_curr];
+                calculate_line_connection(curr_connection, x1, y1, x2, y2, x3, y3, r, rounded_joints);
+
+                submit_connected_line(prev_connection, curr_connection, x1, y1, x2, y2, color, transform_or_null);
 
                 submit_line(prev_x, prev_y, curr_x, curr_y, width, color, transform_or_null);
                 submit_circle(curr_x, curr_y, r, color, transform_or_null);
@@ -843,7 +1110,7 @@ public class Main {
                 if(transform_or_null != null)
                     SUBMIT_TEXT_COUBNTOUR_TEMP_MATRIX.mulLocal(transform_or_null);
 
-                submit_glyph_contour(glyph, scale, width, color, true, SUBMIT_TEXT_COUBNTOUR_TEMP_MATRIX);
+                submit_glyph_contour(glyph, scale, width, color, false, SUBMIT_TEXT_COUBNTOUR_TEMP_MATRIX);
                 text_position += glyph.advance_width;
                 i += 1;
             }
