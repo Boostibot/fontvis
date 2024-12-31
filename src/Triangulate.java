@@ -1,65 +1,164 @@
+import java.util.Arrays;
+
 public final class Triangulate {
     public static final class AABB {
-        public float x0;
-        public float x1;
-        public float y0;
-        public float y1;
-    }
-    
-    public static void aabb_calculate(AABB aabb, float[] xs, float[] ys, int indices[])
-    {
-        //todo
+        public float x0 = 0;
+        public float x1 = 0;
+        public float y0 = 0;
+        public float y1 = 0;
     }
 
-    public static void int_buffer_insert_many(IntBuffer buffer, int vals[], int at)
-    {
-        buffer.resize(buffer.length + vals.length);
-        int[] arr = buffer.array();
-        System.arrayCopy(arr, at, arr, at + vals.length, vals.length);
-        System.arrayCopy(vals, 0, arr, at, vals.length);
+    public static final class AABB_Vertices {
+        public float x0 = 0;
+        public float x1 = 0;
+        public float y0 = 0;
+        public float y1 = 0;
+
+        public int x0_index = 0;
+        public int x1_index = 0;
+        public int y0_index = 0;
+        public int y1_index = 0;
+
+        public int x0_vertex = 0;
+        public int x1_vertex = 0;
+        public int y0_vertex = 0;
+        public int y1_vertex = 0;
     }
 
-    public static int[] connect_holes(float[] xs, float[] ys, int indices[], int holes[][], )
+    public static AABB aabb_from_aabb_vertices(AABB_Vertices aabb)
+    {
+        AABB out = new AABB();
+        out.x0 = aabb.x0;
+        out.x1 = aabb.x1;
+        out.y0 = aabb.y0;
+        out.y1 = aabb.y1;
+        return out;
+    }
+
+    public static AABB_Vertices aabb_calculate(float[] xs, float[] ys, int[] indices)
+    {
+        AABB_Vertices aabb = new AABB_Vertices();
+        if(indices.length > 0)
+        {
+            aabb.x0 = Float.POSITIVE_INFINITY;
+            aabb.x1 = Float.NEGATIVE_INFINITY;
+            aabb.y0 = Float.POSITIVE_INFINITY;
+            aabb.y1 = Float.NEGATIVE_INFINITY;
+            for(int k = 0; k < indices.length; k++)
+            {
+                int index = indices[k];
+                if(aabb.x0 >= xs[index]) {
+                    aabb.x0 = xs[index];
+                    aabb.x0_index = k;
+                }
+
+                if(aabb.x1 <= xs[index]) {
+                    aabb.x1 = xs[index];
+                    aabb.x1_index = k;
+                }
+
+                if(aabb.y0 >= ys[index]) {
+                    aabb.y0 = ys[index];
+                    aabb.y0_index = k;
+                }
+
+                if(aabb.y1 <= ys[index]) {
+                    aabb.y1 = ys[index];
+                    aabb.y1_index = k;
+                }
+            }
+
+            aabb.x0_vertex = indices[aabb.x0_index];
+            aabb.x1_vertex = indices[aabb.x1_index];
+            aabb.y0_vertex = indices[aabb.y0_index];
+            aabb.y1_vertex = indices[aabb.y1_index];
+        }
+        return aabb;
+    }
+
+    public static IntArray connect_holes(float[] xs, float[] ys, int[] indices, int[][] holes)
     {
         if(indices.length == 0)
-            return new int[0];
+            return new IntArray();
+
+        //Get info about each hole (TODO replace with AABB)
+        class Sort_Hole {
+            public int max_x_vertex = 0;
+            public int max_x_index = 0;
+            public float max_x_vertex_x = 0;
+            public float max_x_vertex_y = 0;
+            public int[] indices = null;
+        };
+
+        Sort_Hole[] sorted_holes = new Sort_Hole[holes.length];
+        for(int hole_i = 0; hole_i < holes.length; hole_i++)
+        {
+            int[] hole = holes[hole_i];
+
+            int max_x_index = -1;
+            int max_x_vertex = -1;
+            float max_x = Float.NEGATIVE_INFINITY;
+            float max_y = Float.NEGATIVE_INFINITY;
+            for(int k = 0; k < hole.length; k++)
+            {
+                int index = hole[k];
+                if(max_x <= xs[index]) {
+                    max_x = xs[index];
+                    max_x_index = k;
+                }
+            }
+
+            if(max_x_index != -1)
+            {
+                max_x_vertex = hole[max_x_index];
+                max_y = ys[max_x_vertex];
+            }
+
+            Sort_Hole sorted = new Sort_Hole();
+            sorted.max_x_index = max_x_index;
+            sorted.max_x_vertex = max_x_vertex;
+            sorted.max_x_vertex_x = max_x;
+            sorted.max_x_vertex_y = max_y;
+            sorted.indices = hole;
+            sorted_holes[hole_i] = sorted;
+        }
+
+        //and sort them so the hole with the vertex with biggest max_x_vertex_x is first
+        Arrays.sort(sorted_holes, (hole_a, hole_b) -> -Float.compare(hole_a.max_x_vertex_x, hole_b.max_x_vertex_x));
 
         //calculate the needed allocation size for the holes
         int total_cap = indices.length;
         for(int i = 0; i < holes.length; i++)
             total_cap += holes[i].length;
 
-        total_cap += holes.length*2; //the bridges
+        total_cap += holes.length; //the bridges
 
-        IntBuffer res = IntBuffer.allocate(total_cap); 
-        res.put(indices);
+        //perform the merging
+        IntArray out = IntArray.with_capacity(total_cap);
+        out.push(indices);
 
-        //todo
-        int right_most_indices = new int[];
-        int sorted_holes = new int[][];
-        
         Raycast_Result ray_res = new Raycast_Result();
-
-        for(int hole_i = 0; hole_i < sorted_holes.length; hole_i++)
+        for(Sort_Hole hole : sorted_holes)
         {
-            int[] hole = sorted_holes[hole_i];
-            int right_most_i = right_most_indices[i];
-            
-            if(hole.length > 0)
+            int[] holei = hole.indices;
+            if(holei.length > 0)
             {
-                float origin_x = xs[right_most_i];
-                float origin_y = ys[right_most_i];
-
-                if(raycast_x_polygon(ray_res, xs, ys, res.array(), origin_x, origin_y))
+                float origin_x = hole.max_x_vertex_x;
+                float origin_y = hole.max_x_vertex_y;
+                int max_x_index = hole.max_x_index;
+                if(raycast_x_polygon(ray_res, xs, ys, out.array, origin_x, origin_y))
                 {
-                    int connect_to = ray_res.vertex_0;
-                    int indices_at = ray_res.index_buffer_0;
+                    int index_0 = ray_res.index_0;
 
-                    //hole: hole[right_most_i:]hole[:right_most_i]
-                    //vert: res[:indices_at]res[indices_at:] 
+                    //hole: hole[max_x_index:]hole[:max_x_index]
+                    //vert: out[:index_0]out[index_0:]
                     //============= merge ==========   
-                    //merged: res[:indices_at][connection]hole[right_most_i:]hole[:right_most_i][connection]res[indices_at:]     
-                } 
+                    //merged: out[:index_0]hole[max_x_index:]hole[:max_x_index]out[index_0]res[index_0:]
+                    out.insert_hole(index_0, holei.length + 1);
+                    System.arraycopy(holei, max_x_index, out.array, index_0, holei.length - max_x_index);
+                    System.arraycopy(holei, 0, out.array, index_0 + holei.length - max_x_index, max_x_index);
+                    out.array[index_0 + holei.length] = ray_res.vertex_0;
+                }
                 else
                 {
                     assert false;
@@ -67,6 +166,10 @@ public final class Triangulate {
             }
         }
 
+
+        return out;
+
+        /*
         //merge all holes
         for(int hole_i = 0; hole_i < holes.length; hole_i++)
         {
@@ -77,11 +180,10 @@ public final class Triangulate {
             {
                 int min_i = 0;
                 int min_j = 0;
-                float min_dist = Math.POSITIVE_INFINITY;
+                float min_dist = Float.POSITIVE_INFINITY;
 
-                for(int i = 0; i < hole.length; i++)
-                    for(int j = 0; j < res.length; i++)
-                    {
+                for(int i = 0; i < hole.length; i++) {
+                    for(int j = 0; j < res.length; i++) {
                         float dx = xs[i] - xs[j];
                         float dy = ys[i] - ys[j];
                         float sqr_dist = dx*dx + dy*dy;
@@ -92,14 +194,16 @@ public final class Triangulate {
                             min_dist = sqr_dist;
                         }
                     }
+                }
             }
         }
+        */
     }
 
-    public static int[] triangulate(float[] xs, float[] ys, int indices[])
+    public static IntArray triangulate(float[] xs, float[] ys, int[] indices)
     {
-        IntBuffer triangle_indices = IntBuffer.allocate(3*indices.length); 
-        int[] remaining = Arrays.copyOf(indices);
+        IntArray triangle_indices = IntArray.with_capacity(3*indices.length);
+        int[] remaining = indices.clone();
         int remaining_len = remaining.length;
 
         while(remaining_len >= 3)
@@ -108,19 +212,19 @@ public final class Triangulate {
             for(int i = 1; i <= remaining_len; i++)
             {
                 int rem = remaining_len; //for brevity
-                int prev = indices[i - 1];
-                int curr = indices[i   < rem ? i   : i-rem];
-                int next = indices[i+1 < rem ? i+1 : i+1-rem];
+                int prev = remaining[i - 1];
+                int curr = remaining[i   < rem ? i   : i-rem];
+                int next = remaining[i+1 < rem ? i+1 : i+1-rem];
 
                 if(counter_clockwise_is_convex(xs, ys, prev, curr, next))
                 {
                     //check intersections with all points (not prev,curr,next)
                     boolean contains_no_other_points = true;
-                    for(int i = 0; i < indices; i++)
+                    for(int k = 0; k < indices.length; k++)
                     {
-                        if(i < prev || i > next)
+                        if(k < prev || k > next)
                         {
-                            if(is_in_triangle_with_boundary(xs, ys, prev, curr, next, i))
+                            if(is_in_triangle_with_boundary(xs, ys, prev, curr, next, k))
                             {
                                 contains_no_other_points = false;
                                 break;
@@ -130,13 +234,13 @@ public final class Triangulate {
 
                     if(contains_no_other_points)
                     {
-                        triangle_indices.put(prev);
-                        triangle_indices.put(curr);
-                        triangle_indices.put(next);
+                        triangle_indices.push(prev);
+                        triangle_indices.push(curr);
+                        triangle_indices.push(next);
 
                         //remove arr[curr]
                         for(int j = curr; j < remaining_len - 1; j++)
-                            arr[j] = arr[j + 1];
+                            remaining[j] = remaining[j + 1];
                         remaining_len -= 1;
 
                         did_remove = true;
@@ -152,14 +256,14 @@ public final class Triangulate {
             }
         }
 
-        return triangle_indices.array();
+        return triangle_indices;
     }
     
     public static final class Raycast_Result {
         public int vertex_0;
         public int vertex_1;
 
-        public int index_buffer_0;
+        public int index_0;
         public int index_buffer_1;
 
         public float x;
@@ -169,7 +273,7 @@ public final class Triangulate {
     }
 
     //raycast in x direction starting from origin
-    public static boolean raycast_x_polygon(Raycast_Result result, float[] x, float[] y, int polygon[], float origin_x, float origin_y)
+    public static boolean raycast_x_polygon(Raycast_Result result, float[] x, float[] y, int[] polygon, float origin_x, float origin_y)
     {
         for(int i = 0; i < polygon.length; i++)
         {
@@ -184,8 +288,8 @@ public final class Triangulate {
             float p1x = x[p1i] - origin_x;
             float p1y = y[p1i] - origin_y;
 
-            //y must be between p0 and p1, thus one and only one of p0.y - origin_y or p1.y - origin_y must be negativie.
-            //Thus to check if it is between all we need to do is check wheter wheter their product is negative
+            //y must be between p0 and p1, thus one and only one of p0.y - origin_y or p1.y - origin_y must be negative.
+            //Thus to check if it is between all we need to do is check whether their product is negative
             // (or zero in which case y can be at one end point).
             if(p0y*p1y <= 0)
             {
@@ -198,7 +302,7 @@ public final class Triangulate {
                     {
                         result.vertex_0 = p0i;
                         result.vertex_1 = p1i;
-                        result.index_buffer_0 = i;
+                        result.index_0 = i;
                         result.index_buffer_1 = j;
                         result.x = origin_x;
                         result.y = origin_y;
@@ -209,12 +313,11 @@ public final class Triangulate {
                     //instead of 0 would normally be origin_y but since we 
                     // shifted everything by origin its 0
                     float intersect_x = dx/dy*(0 - p0y) + p0x;
-                    
-                    if(intersect.x >= 0)
+                    if(intersect_x >= 0)
                     {
                         result.vertex_0 = p0i;
                         result.vertex_1 = p1i;
-                        result.index_buffer_0 = i;
+                        result.index_0 = i;
                         result.index_buffer_1 = j;
                         result.x = origin_x;
                         result.y = origin_y;
@@ -227,20 +330,12 @@ public final class Triangulate {
 
         result.vertex_0 = 0;
         result.vertex_1 = 0;
-        result.index_buffer_0 = 0;
+        result.index_0 = 0;
         result.index_buffer_1 = 0;
         result.x = 0;
         result.y = 0;
         result.hit = false;
         return false;
-    }
-
-    public static int small_mod(int i, int len)
-    {
-        if(i < len)
-            return i;
-        else
-            return i - len;
     }
 
     public static float triangle_area(float[] x, float[] y, int a, int b, int c) 
@@ -252,7 +347,7 @@ public final class Triangulate {
     {
         //cross product implicitly treating the z component as zero, 
         // thus will have only the z component nonzero
-        //(cross product is ortogonal to both input vectors which are in XY plane)
+        //(cross product is orthogonal to both input vectors which are in XY plane)
         float cross_product_z = (x[b] - x[a])*(y[c] - y[a]) - (y[b] - y[a])*(x[c] - x[a]);
         return cross_product_z >= 0;
     }
@@ -287,7 +382,6 @@ public final class Triangulate {
     {
         float[] xs = {x1, x2, x3, px};
         float[] ys = {y1, y2, y3, py};
-        int[] indices = {0, 1, 2};
 
         //test all permutations
         {
@@ -315,17 +409,17 @@ public final class Triangulate {
     public static void test_is_in_triangle()
     {
         //we should really test with random data using u,v vectors 
-        // but whatever good enought for now...
+        // but whatever good enough for now...
 
         //regular simple case with permutations 
         test_is_in_triangle_single(0, 0, 2, 0, 0, 2, /**/ 1, 1, true, true); 
-        test_is_in_triangle_single(0, 0, 2, 0, 0, 2, /**/ 0.5, 0.5, true, true); 
+        test_is_in_triangle_single(0, 0, 2, 0, 0, 2, /**/ 0.5f, 0.5f, true, true);
 
         //boundaries
         for(int i = 1; i < 8; i++) {
-            test_is_in_triangle_single(0, 0, 2, 0, 0, 2, /**/ 0, 0.25*i, false, true); 
-            test_is_in_triangle_single(0, 0, 2, 0, 0, 2, /**/ 0.25*i, 0, false, true); 
-            test_is_in_triangle_single(0, 0, 2, 0, 0, 2, /**/ 2 - 0.25*i, 0.25*i, false, true); 
+            test_is_in_triangle_single(0, 0, 2, 0, 0, 2, /**/ 0, 0.25f*i, false, true);
+            test_is_in_triangle_single(0, 0, 2, 0, 0, 2, /**/ 0.25f*i, 0, false, true);
+            test_is_in_triangle_single(0, 0, 2, 0, 0, 2, /**/ 2 - 0.25f*i, 0.25f*i, false, true);
         }
 
         //vertices points
@@ -335,6 +429,6 @@ public final class Triangulate {
 
         //degenerate triangles
         for(int i = 0; i <= 8; i++) 
-            test_is_in_triangle_single(0, 0, 2, 0, 1, 0, /**/ 0, 0.25*i, false, true); 
+            test_is_in_triangle_single(0, 0, 2, 0, 1, 0, /**/ 0, 0.25f*i, false, true);
     }
 }

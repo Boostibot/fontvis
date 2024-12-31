@@ -581,21 +581,6 @@ public class Main {
         }
 
 
-        public static float intersect_lines(
-            float dir1x, float dir1y, float off1x, float off1y,
-            float dir2x, float dir2y, float off2x, float off2y)
-        {
-            float Bx = off2x - off1x;
-            float By = off2y - off1y;
-
-            float num = By*dir2x - Bx*dir2y;
-            float den = dir2x*dir1y - dir2y*dir1x;
-
-            if(den == 0)
-                return Float.POSITIVE_INFINITY;
-            else
-                return num/den;
-        }
 
         public static float hypot(float a, float b)
         {
@@ -1035,31 +1020,6 @@ public class Main {
         }
 
 
-        public static float bezier(float p1, float p2, float p3, float t)
-        {
-            return t*t*p1 + t*(1-t)*p2 + (1-t)*(1-t)*p3;
-        }
-
-        public static float bezier_derivative(float p1, float p2, float p3, float t)
-        {
-            return (p2 - 2*p3) + 2*t*(p1 - p2 - p3);
-        }
-
-        public static float bezier_second_derivative(float p1, float p2, float p3)
-        {
-            return 2*(p1 - p2 - p3);
-        }
-
-        public static float bezier_curvature(float x1, float y1, float x2, float y2, float x3, float y3, float t)
-        {
-            float dx = bezier_derivative(x1, x2, x3, t);
-            float dy = bezier_derivative(y1, y2, y3, t);
-            float ddx = bezier_second_derivative(x1, x2, x3);
-            float ddy = bezier_second_derivative(y1, y2, y3);
-
-            float kappa = (dx*ddy - ddx*dy)/(float) Math.pow(dx*dx + dy*dy, 1.5);
-            return kappa;
-        }
 
         static Line_Connection[] SUMBIT_BEZIER_CONNECTIONS = {new Line_Connection(), new Line_Connection()};
         public void submit_bezier_contour(float x1, float y1, float x2, float y2, float x3, float y3, float width, int color, boolean rounded_joints, int min_segments, int max_segments, Matrix3f transform_or_null)
@@ -1074,8 +1034,8 @@ public class Main {
             {
                 float t = (float) (i + 1)/min_segments;
 
-                float curr_x = bezier(x1, x2, x3, t);
-                float curr_y = bezier(y1, y2, y3, t);
+                float curr_x = Splines.bezier(x1, x2, x3, t);
+                float curr_y = Splines.bezier(y1, y2, y3, t);
 
                 int inset_prev = (i+1) & 1;
                 int inset_curr = i & 1;
@@ -1110,7 +1070,7 @@ public class Main {
                 if(transform_or_null != null)
                     SUBMIT_TEXT_COUBNTOUR_TEMP_MATRIX.mulLocal(transform_or_null);
 
-                submit_glyph_contour(glyph, scale, width, color, false, SUBMIT_TEXT_COUBNTOUR_TEMP_MATRIX);
+                submit_glyph_contour(glyph, scale, width, color, true, SUBMIT_TEXT_COUBNTOUR_TEMP_MATRIX);
                 text_position += glyph.advance_width;
                 i += 1;
             }
@@ -1549,6 +1509,7 @@ public class Main {
     }
 
     public static void main(String[] args) {
+        Splines.main(args);
         new Main().run();
     }
 }
