@@ -29,7 +29,8 @@ import static org.lwjgl.opengl.GL30C.*;
 import static org.lwjgl.opengl.GL30C.glBindVertexArray;
 import static org.lwjgl.system.MemoryStack.stackPush;
 
-public class Renderer {
+public class Render {
+    public static final Matrix4f MAT4_ID = new Matrix4f().identity();
 
     public static final class Quadratic_Bezier_Buffer {
         //2 floats position
@@ -47,9 +48,9 @@ public class Renderer {
         public static int BYTES_PER_SEGMENT = VERTICES_PER_SEGMENT*BYTES_PER_VERTEX;
 
         //default rendering mode: solid triangle with points p1, p2, p3
-        public static int FLAG_BEZIER = 1; //the trinagle is interpreted as quadratic bezier curve where p1, p3 are endpoints and p2 is control point
-        public static int FLAG_CIRCLE = 2; //the triangle is interpreted as circle segement where p2 is the center, and p1, p2 mark the segment sides. The radius is 1 in uv space.
-        public static int FLAG_INVERSE = 4; //the triangle shape is filled inside out. When combiend with redering trinagles, makes the triangle entirely invisible!
+        public static int FLAG_BEZIER = 1; //the triangle is interpreted as quadratic bezier curve where p1, p3 are endpoints and p2 is control point
+        public static int FLAG_CIRCLE = 2; //the triangle is interpreted as circle segment where p2 is the center, and p1, p2 mark the segment sides. The radius is 1 in uv space.
+        public static int FLAG_INVERSE = 4; //the triangle shape is filled inside out. When combined with rendering triangles, makes the triangle entirely invisible!
         public static int FLAG_OKLAB = 8; //vertex colors are interpolated in the OKLAB colorspace instead of linear colorspace.
 
         public Quadratic_Bezier_Buffer(int max_cpu_size)

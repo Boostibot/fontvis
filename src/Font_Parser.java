@@ -62,6 +62,14 @@ public final class Font_Parser {
         public String category;
     };
 
+    public static final class Ref<T> {
+        public T val;
+        public Ref(T v)
+        {
+            val = v;
+        }
+    }
+
     public static Font parse(ByteBuffer buffer, ArrayList<Font_Log> logs)
     {
         //Taken from the original C# implementation TODO!!!

@@ -33,8 +33,8 @@ public final class Integrate {
             {
                 x = x + dt/2*(k1 + k2);
                 t = t + dt;
-
                 if(end) break;
+                k1 = integrand.eval(t, x);
                 if(delta == 0) continue;
             }
             dt = Math.clamp(0.8*Math.sqrt(epsilon/delta)*dt, min_dt, max_dt);
@@ -85,6 +85,7 @@ public final class Integrate {
                 t = t + dt;
 
                 if(end) break;
+                k1 = integrand.eval(t, x);
                 if(delta == 0) continue;
             }
             dt = Math.clamp(Math.pow(epsilon/delta, 0.2)*dt, min_dt, max_dt);

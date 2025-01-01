@@ -4,21 +4,6 @@ public final class Colorspace {
     public float z; //b
     public float a; //alpha
 
-    public static int ucast(byte val)
-    {
-        return (int) val & 0xFF;
-    }
-
-    public static byte hex_t(int hex)
-    {
-        return (byte) (hex >> 24);
-    }
-
-    public static byte hex_a(int hex)
-    {
-        return (byte) (255 - (byte) (hex >> 24));
-    }
-
     public static byte hex_r(int hex)
     {
         return (byte) (hex >> 16);
@@ -34,9 +19,25 @@ public final class Colorspace {
         return (byte) (hex);
     }
 
+    //transparency: 0 = completely opaque, 1 = completely transparent
+    public static byte hex_t(int hex)
+    {
+        return (byte) (hex >> 24);
+    }
+
+    //alpha = 1 - transparency: 0 = completely transparent, 1 = completely opaque
+    public static byte hex_a(int hex)
+    {
+        return (byte) (255 - (byte) (hex >> 24));
+    }
+
     public static int rgba_to_hex(byte r, byte g, byte b, byte a)
     {
-        return ucast((byte)(255 - a)) << 24 | ucast(r) << 16 | ucast(g) << 8 | ucast(b);
+        int ri = (int) r & 0xFF;
+        int gi = (int) g & 0xFF;
+        int bi = (int) b & 0xFF;
+        int ti = (int) (255 - a) & 0xFF;
+        return ti << 24 | ri << 16 | gi << 8 | bi;
     }
 
     public static int rgba_to_hex(float r, float g, float b, float a)
@@ -68,6 +69,14 @@ public final class Colorspace {
         y = _y;
         z = _z;
         a = 1;
+    }
+
+    public Colorspace(Colorspace other)
+    {
+        x = other.x;
+        y = other.y;
+        z = other.z;
+        a = other.a;
     }
 
     public Colorspace(int hex)
@@ -129,5 +138,45 @@ public final class Colorspace {
         y = -1.2684380046f*l + 2.6097574011f*m - 0.3413193965f*s;
         z = -0.0041960863f*l - 0.7034186147f*m + 1.7076147010f*s;
         return this;
+    }
+
+    public static void test_colorspace()
+    {
+        class H {
+            public static void test_rgba_hex_conv(int hex)
+            {
+                byte r = Colorspace.hex_r(hex);
+                byte g = Colorspace.hex_g(hex);
+                byte b = Colorspace.hex_b(hex);
+                byte a = Colorspace.hex_a(hex);
+
+                int back = Colorspace.rgba_to_hex(r,g,b,a);
+                assert back == hex;
+            }
+
+            public static void test_lin_oklab_conv(int hex)
+            {
+                Colorspace lin = new Colorspace(hex);
+                Colorspace lin_back = new Colorspace(hex);
+                lin_back.lin_to_oklab().oklab_to_lin();
+
+                float eps = (float) 1e-6;
+                assert Math.abs(lin.x - lin_back.x) < eps;
+                assert Math.abs(lin.y - lin_back.y) < eps;
+                assert Math.abs(lin.z - lin_back.z) < eps;
+                assert Math.abs(lin.a - lin_back.a) < eps;
+            }
+        }
+
+        H.test_rgba_hex_conv(0xFF00FFFF);
+        H.test_rgba_hex_conv(0x0F00FF00);
+        H.test_rgba_hex_conv(0x33333333);
+
+        H.test_lin_oklab_conv(0x00000000);
+        H.test_lin_oklab_conv(0x000000FF);
+        H.test_lin_oklab_conv(0xFF00FFFF);
+        H.test_lin_oklab_conv(0x0F00FF00);
+        H.test_lin_oklab_conv(0x33333333);
+        H.test_lin_oklab_conv(0xFFFFFFFF);
     }
 }
