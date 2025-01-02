@@ -9,14 +9,20 @@ import java.util.HashMap;
 import java.nio.file.Files;
 
 public final class Font_Parser {
+    public static final class Countour
+    {
+        public int[] xs = new int[0];
+        public int[] ys = new int[0];
+        public boolean[] control_points = new boolean[0];
+    }
+
     public static final class Glyph
     {
+        public Countour[] solids = new Countour[0];
+        public Countour[] holes = new Countour[0];
+
         public int unicode;
         public int index;
-        public int[] points_x;
-        public int[] points_y;
-        public boolean[] points_on_curve;
-        public int[] contour_end_indices;
         public int advance_width;
         public int left_side_bearing;
 
@@ -24,11 +30,6 @@ public final class Font_Parser {
         public int max_x;
         public int min_y;
         public int max_y;
-
-        public int computed_min_x;
-        public int computed_max_x;
-        public int computed_min_y;
-        public int computed_max_y;
     }
 
     public static final class Font
@@ -440,7 +441,7 @@ public final class Font_Parser {
             }
         }
 
-        //Layout data from '' and '' tables
+        //Layout data from 'hhea' and 'hmtx' tables
         {
             int[] glyphs_advance = new int[num_glyphs];
             int[] glyphs_left = new int[num_glyphs];
@@ -532,15 +533,15 @@ public final class Font_Parser {
 
             // Read contour ends
             int numPoints = 0;
-            glyph.contour_end_indices = new int[contourCount];
+            int[] contour_ends = new int[contourCount];
             for (int i = 0; i < contourCount; i++)
             {
                 int contourEndIndex = read_u16(buffer, offset);
                 numPoints = Math.max(numPoints, contourEndIndex + 1);
-                glyph.contour_end_indices[i] = contourEndIndex;
+                contour_ends[i] = contourEndIndex + 1;
             }
 
-            if(glyph.contour_end_indices.length == 0)
+            if(contour_ends.length == 0)
                 font_log_into_list(logs, "error", offset.val, "glyf", STR."No countour end indeces! Glyph index \{glyph_index} Unicode index \{unicode_index}");
 
             if(numPoints <= 0)
@@ -551,9 +552,9 @@ public final class Font_Parser {
 
             //Read flags
             byte[] allFlags = new byte[numPoints];
-            glyph.points_x = new int[numPoints];
-            glyph.points_y = new int[numPoints];
-            glyph.points_on_curve = new boolean[numPoints];
+            int[] points_x = new int[numPoints];
+            int[] points_y = new int[numPoints];
+            boolean[] points_on_curve = new boolean[numPoints];
             for (int i = 0; i < numPoints; i++)
             {
                 int flag = read_i8(buffer, offset);
@@ -579,15 +580,10 @@ public final class Font_Parser {
             for(int k = 0; k < 2; k++)
             {
                 boolean readingX = k == 0;
-                int min = Integer.MAX_VALUE;
-                int max = Integer.MIN_VALUE;
-
                 int BIT_SINGLE_BYTE = readingX ? BIT_SINGLE_BYTE_X : BIT_SINGLE_BYTE_Y;
                 int BIT_SAME_COORD_OR_SIGN = readingX ? BIT_SINGLE_INSTRUCTION_X : BIT_SINGLE_INSTRUCTION_Y;
 
-//                int prev_val = 0;
                 int coord = 0;
-//                int countour_index = 0;
                 for (int i = 0; i < numPoints; i++)
                 {
                     byte flag = allFlags[i];
@@ -598,56 +594,89 @@ public final class Font_Parser {
                     if ((flag & BIT_SINGLE_BYTE) > 0)
                     {
                         coord_offset = read_u8(buffer, offset);
-                        boolean negate = (flag & BIT_SAME_COORD_OR_SIGN) > 0;
-                        coord_offset = negate ? coord_offset : -coord_offset;
+                        if((flag & BIT_SAME_COORD_OR_SIGN) == 0)
+                            coord_offset = -coord_offset;
                     }
                     // Offset value is represented with 2 bytes (signed)
                     // Here the instruction flag tells us whether an offset value exists or not
                     else if ((flag & BIT_SAME_COORD_OR_SIGN) == 0)
-                    {
-                        coord_offset = read_i16(buffer, offset);;
-                    }
+                        coord_offset = read_i16(buffer, offset);
                     //Else is the same
                     else
-                    {
                         coord_offset = 0;
-                    }
 
                     coord += coord_offset;
-//                    prev_val = coord_offset;
                     if (readingX)
-                        glyph.points_x[i] = coord;
+                        points_x[i] = coord;
                     else
-                        glyph.points_y[i] = coord;
+                        points_y[i] = coord;
 
-                    glyph.points_on_curve[i] = (flag & BIT_ON_CURVE) > 0;
-
-                    min = Math.min(min, coord);
-                    max = Math.max(max, coord);
-
-//                    int countour_end = glyph.contour_end_indices.length > countour_index ? glyph.contour_end_indices[countour_index] : Integer.MAX_VALUE;
-//                    if(i == countour_end)
-//                    {
-//                        coord = 0;
-//                        countour_index += 1;
-//                    }
-                }
-
-                if(numPoints != 0)
-                {
-                    if (readingX)
-                    {
-                        glyph.computed_min_x = min;
-                        glyph.computed_max_x = max;
-                    }
-                    else
-                    {
-                        glyph.computed_min_y = min;
-                        glyph.computed_max_y = max;
-                    }
+                    points_on_curve[i] = (flag & BIT_ON_CURVE) > 0;
                 }
             }
 
+            ArrayList<Countour> solids = new ArrayList<>();
+            ArrayList<Countour> holes = new ArrayList<>();
+
+            //process into contours
+            for(int k = 0; k < contour_ends.length; k++)
+            {
+                int start_i = k == 0 ? 0 : contour_ends[k-1];
+                int end_i = contour_ends[k];
+
+                //count implied points
+                int implied_points = 0;
+                for(int i = start_i + 1; i < end_i; i++)
+                    if(points_on_curve[i - 1] && points_on_curve[i])
+                        implied_points += 1;
+
+                int total_points = end_i - start_i + implied_points;
+                int[] xs = new int[total_points];
+                int[] ys = new int[total_points];
+                boolean[] control_points = new boolean[total_points];
+
+                //copy over in reverse order and also fill in implied points
+                {
+                    int j = total_points;
+                    for(int i = start_i; i < end_i; i++)
+                    {
+                        if(i > start_i && points_on_curve[i - 1] && points_on_curve[i])
+                        {
+                            j -= 1;
+                            xs[j] = (points_x[i - 1] + points_x[i])/2;
+                            ys[j] = (points_y[i - 1] + points_y[i])/2;
+                            control_points[j] = false;
+                        }
+
+                        j -= 1;
+                        xs[j] = points_x[i];
+                        ys[j] = points_y[i];
+                        control_points[j] = points_on_curve[i] == false;
+                    }
+                }
+
+                //calculate signed area
+                long signed_area = 0;
+                for(int i = 0; i < total_points; i++)
+                {
+                    int j = i+1 < total_points ? i+1 : 0;
+                    signed_area += (long)xs[i] * ys[j] - (long)xs[j] * ys[i];
+                }
+
+                Countour contour = new Countour();
+                contour.xs = xs;
+                contour.ys = ys;
+                contour.control_points = control_points;
+
+                if(signed_area >= 0)
+                    solids.add(contour);
+                else
+                    holes.add(contour);
+            }
+
+            Countour[] temp = new Countour[0];
+            glyph.solids = solids.toArray(temp);
+            glyph.holes = holes.toArray(temp);
             return glyph;
         }
         else
@@ -697,28 +726,28 @@ public final class Font_Parser {
                 double offsetX = arg1;
                 double offsetY = arg2;
 
-                double iHat_x = 1;
-                double iHat_y = 0;
-                double jHat_x = 0;
-                double jHat_y = 1;
+                double i_hat_x = 1;
+                double i_hat_y = 0;
+                double j_hat_x = 0;
+                double j_hat_y = 1;
 
                 if (isSingleScaleValue)
                 {
-                    iHat_x = u2dot14_to_double(read_u16(buffer, offset));
-                    jHat_y = iHat_x;
+                    i_hat_x = u2dot14_to_double(read_u16(buffer, offset));
+                    j_hat_y = i_hat_x;
                 }
                 else if (isXAndYScale)
                 {
-                    iHat_x = u2dot14_to_double(read_u16(buffer, offset));
-                    jHat_y = u2dot14_to_double(read_u16(buffer, offset));
+                    i_hat_x = u2dot14_to_double(read_u16(buffer, offset));
+                    j_hat_y = u2dot14_to_double(read_u16(buffer, offset));
                 }
                 // TODO: incomplete implemntation
                 else if (is2x2Matrix)
                 {
-                    iHat_x = u2dot14_to_double(read_u16(buffer, offset));
-                    iHat_y = u2dot14_to_double(read_u16(buffer, offset));
-                    jHat_x = u2dot14_to_double(read_u16(buffer, offset));
-                    jHat_y = u2dot14_to_double(read_u16(buffer, offset));
+                    i_hat_x = u2dot14_to_double(read_u16(buffer, offset));
+                    i_hat_y = u2dot14_to_double(read_u16(buffer, offset));
+                    j_hat_x = u2dot14_to_double(read_u16(buffer, offset));
+                    j_hat_y = u2dot14_to_double(read_u16(buffer, offset));
                 }
 
                 //Read the primitive glyph
@@ -727,36 +756,24 @@ public final class Font_Parser {
                 offset.val = loc;
 
                 //transform its points
-                for (int i = 0; i < primitive.points_x.length; i++)
+                for(int i = 0; i < primitive.solids.length + primitive.holes.length; i++)
                 {
-                    long x = primitive.points_x[i];
-                    long y = primitive.points_y[i];
-                    double xPrime = iHat_x*x + jHat_x*y + offsetX;
-                    double yPrime = iHat_y*x + jHat_y*y + offsetY;
+                    Countour countour = i < primitive.solids.length
+                        ? primitive.solids[i]
+                        : primitive.holes[i - primitive.solids.length];
 
-                    primitive.points_x[i] = (int) xPrime;
-                    primitive.points_y[i] = (int) yPrime;
+                    long x = countour.xs[i];
+                    long y = countour.ys[i];
+
+                    double x_prime = i_hat_x*x + j_hat_x*y + offsetX;
+                    double y_prime = i_hat_y*x + j_hat_y*y + offsetY;
+
+                    countour.xs[i] = (int) x_prime;
+                    countour.ys[i] = (int) y_prime;
                 }
 
-                //Add the primitive to the compound (if is the first one steal its data)
-                if(compound.points_x == null)
-                {
-                    compound.points_x = primitive.points_x;
-                    compound.points_y = primitive.points_y;
-                    compound.contour_end_indices = primitive.contour_end_indices;
-                    compound.points_on_curve = primitive.points_on_curve;
-                }
-                else
-                {
-                    //Offset the end indeces
-                    for (int i = 0; i < primitive.contour_end_indices.length; i++)
-                        primitive.contour_end_indices[i] += compound.points_x.length;
-
-                    compound.points_x = array_concat(compound.points_x, primitive.points_x);
-                    compound.points_y = array_concat(compound.points_y, primitive.points_y);
-                    compound.points_on_curve = array_concat(compound.points_on_curve, primitive.points_on_curve);
-                    compound.contour_end_indices = array_concat(compound.contour_end_indices, primitive.contour_end_indices);
-                }
+                compound.solids = array_concat(compound.solids, primitive.solids);
+                compound.holes = array_concat(compound.holes, primitive.holes);
             }
 
             return compound;

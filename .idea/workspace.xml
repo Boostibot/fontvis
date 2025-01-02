@@ -5,15 +5,11 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="b0cb0470-dd75-4914-b05d-f64de2c9fd97" name="Changes" comment="fixes, bunch of splines">
-      <change afterPath="$PROJECT_DIR$/src/Render.java" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/Colorspace.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/Colorspace.java" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/Font_Parser.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/Font_Parser.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/Integrate.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/Integrate.java" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/Main.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/Main.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/Ref.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/Renderer.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/Splines.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/Splines.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/Render.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/Render.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/Triangulate.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/Triangulate.java" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -110,6 +106,16 @@
           <properties class="java.lang.AssertionError" package="java.lang" />
           <option name="timeStamp" value="23" />
         </breakpoint>
+        <line-breakpoint enabled="true" type="java-line">
+          <url>file://$PROJECT_DIR$/src/Main.java</url>
+          <line>57</line>
+          <option name="timeStamp" value="33" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" type="java-line">
+          <url>file://$PROJECT_DIR$/src/Main.java</url>
+          <line>96</line>
+          <option name="timeStamp" value="34" />
+        </line-breakpoint>
       </breakpoints>
     </breakpoint-manager>
   </component>

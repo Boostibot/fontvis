@@ -27,6 +27,140 @@ public class Main {
     public static final int MB = 1024*1024;
     public static final int GB = 1024*1024*1024;
 
+    public static final class Geometry
+    {
+        public float[] xs;
+        public float[] ys;
+        public int[] flags;
+        public int[] indices;
+        public int indices_length;
+
+        public Triangulate.AABB_Vertices aabb;
+    }
+
+    /*
+    public static Geometry geometry_from_glyph(Font_Parser.Glyph glyph, float units_per_em)
+    {
+        assert glyph.points_x.length == glyph.points_y.length;
+        assert glyph.points_x.length == glyph.points_on_curve.length;
+        assert glyph.contour_end_indices.length > 0;
+
+        boolean[] on_curve = glyph.points_on_curve.clone();
+        float[] xs = new float[glyph.points_x.length];
+        float[] ys = new float[glyph.points_y.length];
+
+        for(int i = 0; i < glyph.points_x.length; i++)
+            xs[i] = glyph.points_x[i]/units_per_em;
+
+        for(int i = 0; i < glyph.points_y.length; i++)
+            ys[i] = glyph.points_y[i]/units_per_em;
+
+        for(int j = 0; j < glyph.contour_ends.length; j++)
+        {
+            int i_start = j == 0 ? 0 : glyph.contour_ends[j - 1];
+            int i_end = glyph.contour_ends[j];
+            int range = i_end - i_start;
+            if(range <= 1)
+                continue;
+
+            //reverse orientation to make it easier to work with
+
+            //calculate signed area of this contour in
+            // treating all beziers as straight lines.
+            //The signed are will be positive for when the indices
+            // are oriented counter clockwise
+            float signed_area = 0;
+            for(int i = 0; i < range;)
+            {
+                int i0 = i_start + i;
+                int i1 = i_start + ((i+1) % range);
+
+                int p0 = i0;
+                int p1 = i1;
+                i += 1;
+
+                assert glyph.points_on_curve[i0];
+                //if is a bezier ignore the control vertex
+                // and instead use third point
+                if(glyph.points_on_curve[i1] == false)
+                {
+                    int i2 = i_start + ((i+2) % range);
+                    assert glyph.points_on_curve[i2];
+
+                    p1 = i2;
+                    i += 1;
+                }
+
+                signed_area += xs[p0] * ys[p1] - xs[p1] * ys[p0];
+            }
+
+            boolean is_hole = signed_area < 0;
+            boolean is_polygon = signed_area >= 0;
+            assert is_hole == false;
+
+            IntArray polygon_indices = new IntArray();
+            IntArray bezier_indices_out_bend = new IntArray();
+            IntArray bezier_indices_in_bend = new IntArray();
+
+            for(int i = 0; i <= range;)
+            {
+                int i0 = i_start + ((i+0) % range);
+                int i1 = i_start + ((i+1) % range);
+                int i2 = i_start + ((i+2) % range);
+                int increment = 0;
+
+                assert glyph.points_on_curve[i0];
+
+                //if is a bezier
+                if(glyph.points_on_curve[i1] == false)
+                {
+                    assert glyph.points_on_curve[i2];
+
+                    //Pessimistically approximate the bezier using straight lines.
+                    // That is replace it with straight lines such that the are of the
+                    // resulting shape will be less than the original filled bezier.
+
+                    //if is bend outwards approximate using straight line
+                    // (reduce D shape curve to line)
+                    if(Triangulate.counter_clockwise_is_convex(xs, ys, i0, i1, i2) == is_polygon)
+                    {
+                        polygon_indices.push(i0);
+
+                        bezier_indices_out_bend.push(i0);
+                        bezier_indices_out_bend.push(i1);
+                        bezier_indices_out_bend.push(i2);
+                    }
+                    //is is bend inwards approximate using V shape
+                    else
+                    {
+                        polygon_indices.push(i0);
+                        polygon_indices.push(i1);
+
+                        bezier_indices_in_bend.push(i0);
+                        bezier_indices_in_bend.push(i1);
+                        bezier_indices_in_bend.push(i2);
+                    }
+
+                    //add the bezier
+                    increment = 2;
+                }
+                //is a simple line
+                else
+                {
+                    polygon_indices.push(i0);
+                    increment = 1;
+                }
+
+                i += increment;
+            }
+
+
+
+        }
+
+        return new Geometry();
+    }
+    */
 
     private void run() {
         ArrayList<Font_Parser.Font_Log> logs = new ArrayList<>();
@@ -113,6 +247,9 @@ public class Main {
         Render.Quadratic_Bezier_Buffer glyph_buffer = new Render.Quadratic_Bezier_Buffer(4*MB);
         glyph_buffer.grows = false;
 
+
+
+
         glyph_buffer.submit_text_countour(font, "kruw", 1.0f/font.units_per_em, 0.05f, 0.05f, 1, 0x80FFFFFF, null);
 
         Matrix4f view_matrix = new Matrix4f();
@@ -180,6 +317,7 @@ public class Main {
     public static void main(String[] args) {
         Splines.test_some_splines();
         Colorspace.test_colorspace();
+        Triangulate.test_is_in_triangle();
         new Main().run();
     }
 }

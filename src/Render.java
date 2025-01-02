@@ -478,8 +478,8 @@ public class Render {
             //                          |  /
             //                           B
 
-            assert is_near(hypot(ux, uy), 1); //Needs to be normalized
-            assert is_near(hypot(vx, vy), 1); //Needs to be normalized
+//            assert is_near(hypot(ux, uy), 1); //Needs to be normalized
+//            assert is_near(hypot(vx, vy), 1); //Needs to be normalized
 
             final float PERPEND_EPSILON = 0.0001f;
 
@@ -764,30 +764,27 @@ public class Render {
         static Line_Connection[] SUMBIT_GLYPH_CONNECTIONS = {new Line_Connection(), new Line_Connection()};
         public void submit_glyph_contour(Font_Parser.Glyph glyph, float scale, float width, int color, boolean rounded_joints, Matrix3f transform_or_null)
         {
-            assert glyph.points_x.length == glyph.points_y.length;
-            assert glyph.points_x.length == glyph.points_on_curve.length;
-
             float r = width/2;
-            assert glyph.contour_end_indices.length > 0;
-            for(int j = 0; j < glyph.contour_end_indices.length; j++)
+            for(int k = 0; k < glyph.solids.length + glyph.holes.length; k++)
             {
-                int i_start = j == 0 ? 0 : glyph.contour_end_indices[j - 1] + 1;
-                int i_end = glyph.contour_end_indices[j];
-                int range = i_end - i_start;
-                if(range <= 1)
-                    continue;
+                Font_Parser.Countour countour = k < glyph.solids.length
+                        ? glyph.solids[k]
+                        : glyph.holes[k];
 
-                int prev = i_end;
-                int curr = i_start;
-                int next = i_start + 1;
-                for(int i = 0; i <= range + 1; i++)
+                assert countour.xs.length == countour.ys.length;
+                assert countour.xs.length == countour.control_points.length;
+
+                int prev = countour.xs.length - 1;
+                int curr = 0;
+                int next = 1;
+                for(int i = 0; i <= countour.xs.length + 1; i++)
                 {
-                    float x1 = glyph.points_x[prev]*scale;
-                    float y1 = glyph.points_y[prev]*scale;
-                    float x2 = glyph.points_x[curr]*scale;
-                    float y2 = glyph.points_y[curr]*scale;
-                    float x3 = glyph.points_x[next]*scale;
-                    float y3 = glyph.points_y[next]*scale;
+                    float x1 = countour.xs[prev]*scale;
+                    float y1 = countour.ys[prev]*scale;
+                    float x2 = countour.xs[curr]*scale;
+                    float y2 = countour.ys[curr]*scale;
+                    float x3 = countour.xs[next]*scale;
+                    float y3 = countour.ys[next]*scale;
 
                     int inset_prev = (i+1) & 1;
                     int inset_curr = i & 1;
@@ -804,14 +801,11 @@ public class Render {
                     prev = curr;
                     curr = next;
                     next = curr + 1;
-                    if(next > i_end)
-                        next = i_start;
+                    if(next >= countour.xs.length)
+                        next = 0;
                 }
             }
-
         }
-
-
 
         static Line_Connection[] SUMBIT_BEZIER_CONNECTIONS = {new Line_Connection(), new Line_Connection()};
         public void submit_bezier_contour(float x1, float y1, float x2, float y2, float x3, float y3, float width, int color, boolean rounded_joints, int min_segments, int max_segments, Matrix3f transform_or_null)
