@@ -298,7 +298,7 @@ public final class Triangulate {
         //Note: to ensure no numerical accuracy errors, degenerate beziers (straight lines)
         // should also be in normalized form: the control point should be equal to the first
         // point. This ensures things cancel out nicely.
-        if(from_i + 1 >= to_i)
+        if(from_i + 1 >= to_i || (to_i - from_i) % 2 != 0)
             return false;
 
         Splines.Intersections intersections = new Splines.Intersections();

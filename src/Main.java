@@ -250,7 +250,7 @@ public class Main {
 
 
 
-        glyph_buffer.submit_text_countour(font, "kruw", 1.0f/font.units_per_em, 0.05f, 0.05f, 1, 0x80FFFFFF, null);
+        glyph_buffer.submit_text_countour(font, "obaH", 1.0f/font.units_per_em, 0.05f, 0.05f, 1, 0x80FFFFFF, null);
 
         Matrix4f view_matrix = new Matrix4f();
         Matrix3f transf_matrix = new Matrix3f();

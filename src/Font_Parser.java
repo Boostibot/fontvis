@@ -629,48 +629,115 @@ public final class Font_Parser {
                 int start_i = k == 0 ? 0 : contour_ends[k-1];
                 int end_i = contour_ends[k];
 
+                int input_points = end_i - start_i;
+                if(input_points <= 0)
+                    continue;
+
                 //count implied and control points
                 int implied_points = 0;
                 int on_curve_points = 0;
-                for(int i = start_i; i < end_i; i++) {
-                    if(points_on_curve[i])
-                        on_curve_points += 1;
-                    if(i >= 1 && points_on_curve[i - 1] == false && points_on_curve[i] == false)
-                        implied_points += 1;
+                {
+                    int j = end_i - 1;
+                    for(int i = start_i; i < end_i; i++) {
+                        if(points_on_curve[i])
+                            on_curve_points += 1;
+                        if(points_on_curve[j] == false && points_on_curve[i] == false)
+                            implied_points += 1;
+                        j = i;
+                    }
                 }
 
-                int total_points = on_curve_points + implied_points;
+                //add all implied points and reverse
+                int with_implied_count = input_points + implied_points;
+                int[] with_implied_x = new int[with_implied_count];
+                int[] with_implied_y = new int[with_implied_count];
+                boolean[] with_implied_on_curve = new boolean[with_implied_count];
+                {
+                    int push_i = with_implied_count;
+                    int j = end_i - 1;
+                    for(int i = start_i; i < end_i; i++) {
+                        if(points_on_curve[j] == false && points_on_curve[i] == false)
+                        {
+                            push_i -= 1;
+                            with_implied_x[push_i] = (points_x[j] + points_x[i])/2;
+                            with_implied_y[push_i] = (points_y[j] + points_y[i])/2;
+                            with_implied_on_curve[push_i] = true;
+                        }
 
+                        push_i -= 1;
+                        with_implied_x[push_i] = points_x[i];
+                        with_implied_y[push_i] = points_y[i];
+                        with_implied_on_curve[push_i] = points_on_curve[i];
+                        j = i;
+                    }
+                    assert push_i == 0;
+                }
+
+                //form valid segments
+                int total_points = on_curve_points + implied_points;
                 int[] xs = new int[2*total_points];
                 int[] ys = new int[2*total_points];
 
+                {
+                    //add all on curve points and assume they form linear segments
+                    int push_i = 0;
+                    for(int i = 0; i < with_implied_count; i++) {
+                        if(with_implied_on_curve[i] )
+                        {
+                            //connection
+                            xs[2*push_i] = with_implied_x[i];
+                            ys[2*push_i] = with_implied_y[i];
+                            //destination
+                            xs[2*push_i + 1] = with_implied_x[i];
+                            ys[2*push_i + 1] = with_implied_y[i];
+                            push_i += 1;
+                        }
+                    }
+                    assert push_i == total_points;
+
+                    //override some connections with bezier curves
+                    int write_i = 0;
+                    for(int i = 0; i < with_implied_count; i++) {
+                        if(with_implied_on_curve[i])
+                            write_i = (write_i + 1) % total_points;
+                        else
+                        {
+                            xs[2*write_i] = with_implied_x[i];;
+                            ys[2*write_i] = with_implied_y[i];;
+                        }
+                    }
+                }
+
                 //copy over in reverse order and also fill in implied points,
                 // doubled linear segments etc.
+                if(false)
                 {
-                    int j = 2*total_points;
+                    int push_i = 2*total_points;
+                    int j = end_i - 1;
                     for(int i = start_i; i < end_i; i++)
                     {
-                        if(i > start_i && points_on_curve[i - 1] == points_on_curve[i])
+                        if(points_on_curve[j] == points_on_curve[i])
                         {
                             //linear segment
                             if(points_on_curve[i])
                             {
-                                j -= 1;
-                                xs[j] = points_x[i];
-                                ys[j] = points_y[i];
+                                push_i -= 1;
+                                xs[push_i] = points_x[j];
+                                ys[push_i] = points_y[j];
                             }
                             //implied point
                             else
                             {
-                                j -= 1;
-                                xs[j] = (points_x[i - 1] + points_x[i])/2;
-                                ys[j] = (points_y[i - 1] + points_y[i])/2;
+                                push_i -= 1;
+                                xs[push_i] = (points_x[j] + points_x[i])/2;
+                                ys[push_i] = (points_y[j] + points_y[i])/2;
                             }
                         }
 
-                        j -= 1;
-                        xs[j] = points_x[i];
-                        ys[j] = points_y[i];
+                        push_i -= 1;
+                        assert points_on_curve[i] == (push_i % 2 == 0);
+                        xs[push_i] = points_x[i];
+                        ys[push_i] = points_y[i];
                     }
                 }
 

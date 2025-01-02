@@ -769,22 +769,41 @@ public class Render {
             {
                 Font_Parser.Countour countour = k < glyph.solids.length
                         ? glyph.solids[k]
-                        : glyph.holes[k];
+                        : glyph.holes[k - glyph.solids.length];
 
                 assert countour.xs.length == countour.ys.length;
 
                 int prev = countour.xs.length - 1;
                 for(int i = 0; i + 1 <= countour.xs.length; i += 2)
                 {
-                    int control_i = i;
+                    int control = i;
                     int curr = i + 1;
 
                     float x1 = countour.xs[prev]*scale;
                     float y1 = countour.ys[prev]*scale;
-                    float x2 = countour.xs[curr]*scale;
-                    float y2 = countour.ys[curr]*scale;
+                    float x2 = countour.xs[control]*scale;
+                    float y2 = countour.ys[control]*scale;
+                    float x3 = countour.xs[curr]*scale;
+                    float y3 = countour.ys[curr]*scale;
 
-                    submit_line(x1, y1, x2, y2, width, color, transform_or_null);
+                    if(false)
+                    {
+
+                    if(i == 0)
+                        submit_circle(x1, y2, r, 0x00FF00, transform_or_null);
+
+                    submit_line(x1, y1, x2, y2, width, 0x55FF0000, transform_or_null);
+                    submit_line(x2, y2, x3, y3, width, color, transform_or_null);
+
+                    if(x2 != x3 || y2 != y3)
+                        submit_circle(x2, y2, r, 0x0000FF, transform_or_null);
+                    }
+
+                    if(true)
+                    if(x2 == x3 && y2 == y3)
+                        submit_line(x1, y1, x3, y3, width, color, transform_or_null);
+                    else
+                        submit_bezier_contour(x1, y1, x2, y2, x3, y3, width, color, false, 20, 20, transform_or_null);
                     prev = curr;
                 }
             }
@@ -809,11 +828,11 @@ public class Render {
                 int inset_prev = (i+1) & 1;
                 int inset_curr = i & 1;
 
-                Line_Connection prev_connection = SUMBIT_BEZIER_CONNECTIONS[inset_prev];
-                Line_Connection curr_connection = SUMBIT_BEZIER_CONNECTIONS[inset_curr];
-                calculate_line_connection(curr_connection, x1, y1, x2, y2, x3, y3, r, rounded_joints);
+//                Line_Connection prev_connection = SUMBIT_BEZIER_CONNECTIONS[inset_prev];
+//                Line_Connection curr_connection = SUMBIT_BEZIER_CONNECTIONS[inset_curr];
+//                calculate_line_connection(curr_connection, x1, y1, x2, y2, x3, y3, r, rounded_joints);
 
-                submit_connected_line(prev_connection, curr_connection, x1, y1, x2, y2, color, transform_or_null);
+//                submit_connected_line(prev_connection, curr_connection, x1, y1, x2, y2, color, transform_or_null);
 
                 submit_line(prev_x, prev_y, curr_x, curr_y, width, color, transform_or_null);
                 submit_circle(curr_x, curr_y, r, color, transform_or_null);
