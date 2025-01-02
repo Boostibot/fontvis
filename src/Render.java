@@ -772,37 +772,20 @@ public class Render {
                         : glyph.holes[k];
 
                 assert countour.xs.length == countour.ys.length;
-                assert countour.xs.length == countour.control_points.length;
 
                 int prev = countour.xs.length - 1;
-                int curr = 0;
-                int next = 1;
-                for(int i = 0; i <= countour.xs.length + 1; i++)
+                for(int i = 0; i + 1 <= countour.xs.length; i += 2)
                 {
+                    int control_i = i;
+                    int curr = i + 1;
+
                     float x1 = countour.xs[prev]*scale;
                     float y1 = countour.ys[prev]*scale;
                     float x2 = countour.xs[curr]*scale;
                     float y2 = countour.ys[curr]*scale;
-                    float x3 = countour.xs[next]*scale;
-                    float y3 = countour.ys[next]*scale;
 
-                    int inset_prev = (i+1) & 1;
-                    int inset_curr = i & 1;
-
-                    Line_Connection prev_connection = SUMBIT_GLYPH_CONNECTIONS[inset_prev];
-                    Line_Connection curr_connection = SUMBIT_GLYPH_CONNECTIONS[inset_curr];
-                    calculate_line_connection(curr_connection, x1, y1, x2, y2, x3, y3, r, rounded_joints);
-
-                    if(i > 0)
-                        submit_connected_line(prev_connection, curr_connection, x1, y1, x2, y2, color, transform_or_null);
-                    else
-                        submit_circle(x2, y2, 0.02f, 0xFF, transform_or_null);
-
+                    submit_line(x1, y1, x2, y2, width, color, transform_or_null);
                     prev = curr;
-                    curr = next;
-                    next = curr + 1;
-                    if(next >= countour.xs.length)
-                        next = 0;
                 }
             }
         }

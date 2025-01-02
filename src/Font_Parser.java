@@ -11,9 +11,14 @@ import java.nio.file.Files;
 public final class Font_Parser {
     public static final class Countour
     {
+        //is quadratic/linear bezier countour:
+        // - if is solid is counter-clockwise
+        // - if is hole is clockwise
+        // - is built from connected segments
+        // The segments are pairs of points [p1, p2]
+        //TODO explain better
         public int[] xs = new int[0];
         public int[] ys = new int[0];
-        public boolean[] control_points = new boolean[0];
     }
 
     public static final class Glyph
@@ -624,34 +629,48 @@ public final class Font_Parser {
                 int start_i = k == 0 ? 0 : contour_ends[k-1];
                 int end_i = contour_ends[k];
 
-                //count implied points
+                //count implied and control points
                 int implied_points = 0;
-                for(int i = start_i + 1; i < end_i; i++)
-                    if(points_on_curve[i - 1] && points_on_curve[i])
+                int on_curve_points = 0;
+                for(int i = start_i; i < end_i; i++) {
+                    if(points_on_curve[i])
+                        on_curve_points += 1;
+                    if(i >= 1 && points_on_curve[i - 1] == false && points_on_curve[i] == false)
                         implied_points += 1;
+                }
 
-                int total_points = end_i - start_i + implied_points;
-                int[] xs = new int[total_points];
-                int[] ys = new int[total_points];
-                boolean[] control_points = new boolean[total_points];
+                int total_points = on_curve_points + implied_points;
 
-                //copy over in reverse order and also fill in implied points
+                int[] xs = new int[2*total_points];
+                int[] ys = new int[2*total_points];
+
+                //copy over in reverse order and also fill in implied points,
+                // doubled linear segments etc.
                 {
-                    int j = total_points;
+                    int j = 2*total_points;
                     for(int i = start_i; i < end_i; i++)
                     {
-                        if(i > start_i && points_on_curve[i - 1] && points_on_curve[i])
+                        if(i > start_i && points_on_curve[i - 1] == points_on_curve[i])
                         {
-                            j -= 1;
-                            xs[j] = (points_x[i - 1] + points_x[i])/2;
-                            ys[j] = (points_y[i - 1] + points_y[i])/2;
-                            control_points[j] = false;
+                            //linear segment
+                            if(points_on_curve[i])
+                            {
+                                j -= 1;
+                                xs[j] = points_x[i];
+                                ys[j] = points_y[i];
+                            }
+                            //implied point
+                            else
+                            {
+                                j -= 1;
+                                xs[j] = (points_x[i - 1] + points_x[i])/2;
+                                ys[j] = (points_y[i - 1] + points_y[i])/2;
+                            }
                         }
 
                         j -= 1;
                         xs[j] = points_x[i];
                         ys[j] = points_y[i];
-                        control_points[j] = points_on_curve[i] == false;
                     }
                 }
 
@@ -666,7 +685,6 @@ public final class Font_Parser {
                 Countour contour = new Countour();
                 contour.xs = xs;
                 contour.ys = ys;
-                contour.control_points = control_points;
 
                 if(signed_area >= 0)
                     solids.add(contour);

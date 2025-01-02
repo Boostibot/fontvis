@@ -168,36 +168,6 @@ public final class Triangulate {
 
 
         return out;
-
-        /*
-        //merge all holes
-        for(int hole_i = 0; hole_i < holes.length; hole_i++)
-        {
-            //for each hole find minimum distance between its vertex 
-            // and the vertex of the resulting polygon so 
-            int[] hole = holes[hole_i];
-            if(hole.length > 0)
-            {
-                int min_i = 0;
-                int min_j = 0;
-                float min_dist = Float.POSITIVE_INFINITY;
-
-                for(int i = 0; i < hole.length; i++) {
-                    for(int j = 0; j < res.length; i++) {
-                        float dx = xs[i] - xs[j];
-                        float dy = ys[i] - ys[j];
-                        float sqr_dist = dx*dx + dy*dy;
-                        if(min_dist > sqr_dist)
-                        {
-                            min_i = i;
-                            min_j = j;
-                            min_dist = sqr_dist;
-                        }
-                    }
-                }
-            }
-        }
-        */
     }
 
     public static IntArray triangulate(float[] xs, float[] ys, int[] indices)
@@ -259,6 +229,216 @@ public final class Triangulate {
         return triangle_indices;
     }
 
+
+    public static float cross_product_z(float ux, float uy, float vx, float vy)
+    {
+        return ux*vy - vx*uy;
+    }
+    public static float cross_product_z(float px, float py, float p1x, float p1y, float p2x, float p2y)
+    {
+        return cross_product_z(p1x - px, p1y - py, p2x - px, p2y - py);
+    }
+
+    public static boolean is_point_on_segment(float px, float py, float p1x, float p1y, float p2x, float p2y)
+    {
+        float d1x = p1x - px;
+        float d1y = p1y - py;
+        float d2x = p2x - px;
+        float d2y = p2y - py;
+
+        return cross_product_z(d1x, d1y, d2x, d2x) == 0  //if forms a zero area triangle with point p
+            && d1x*d2x <= 0  //if px is between p1x and p2x (or equal to one)
+            && d1y*d2y <= 0; //similarly for py
+    }
+
+    public static int POINT_IN_SHAPE_WITH_BOUNDARY = 0;
+    public static int POINT_IN_SHAPE_INTERIOR = 1;
+    public static int POINT_IN_SHAPE_BOUNDARY_DONT_CARE = 2;
+    public static boolean is_inside_polygon_winding(int allow_boundary, float[] x, float[] y, int from_i, int to_i, float origin_x, float origin_y)
+    {
+        //https://web.archive.org/web/20130126163405/http://geomalgorithms.com/a03-_inclusion.html
+        if(from_i >= to_i)
+            return false;
+
+        int winding_number = 0;
+        float p1x = x[to_i - 1] - origin_x;
+        float p1y = y[to_i - 1] - origin_y;
+        for (int i = from_i; i < to_i; i++)
+        {
+            float p2x = x[i] - origin_x;
+            float p2y = y[i] - origin_y;
+
+            float cross = cross_product_z(p1x, p1y, p2x, p2y, 0, 0);
+            // Check if the point lies on the current edge
+            if(allow_boundary != POINT_IN_SHAPE_BOUNDARY_DONT_CARE)
+                if(cross == 0 //if forms a zero area triangle with point p
+                    && p1x*p2x <= 0  //if px is between p1x and p2x (or equal to one)
+                    && p1y*p2y <= 0) //similarly for py
+                    return allow_boundary == POINT_IN_SHAPE_WITH_BOUNDARY;
+
+            // Calculate the cross product to determine winding direction
+            if (p1y <= 0) {
+                if (p2y > 0 && cross > 0)
+                    winding_number++;
+            }
+            else {
+                if (p2y <= 0 && cross < 0)
+                    winding_number--;
+            }
+
+            p1x = p2x;
+            p1y = p2y;
+        }
+
+        return winding_number != 0;
+    }
+
+    public static boolean is_inside_normalized_bezier(int allow_boundary, float[] x, float[] y, int from_i, int to_i, float origin_x, float origin_y)
+    {
+        //Note: to ensure no numerical accuracy errors, degenerate beziers (straight lines)
+        // should also be in normalized form: the control point should be equal to the first
+        // point. This ensures things cancel out nicely.
+        if(from_i + 1 >= to_i)
+            return false;
+
+        Splines.Intersections intersections = new Splines.Intersections();
+        int hits = 0;
+        float p1x = x[to_i - 1] - origin_x;
+        float p1y = y[to_i - 1] - origin_y;
+        for (int i = from_i; i + 1 < to_i; i += 2)
+        {
+            float p2x = x[i] - origin_x;
+            float p2y = y[i] - origin_y;
+            float p3x = x[i + 1] - origin_x;
+            float p3y = y[i + 1] - origin_y;
+
+            //assert that bezier is normalized:
+            // the control point is never an extremity
+            //This allows us to write a lot simpler code
+            assert Math.min(p1y, p3y) <= p2y && p2y <= Math.max(p1y, p3y);
+            assert Math.min(p1x, p3x) <= p2x && p2x <= Math.max(p1x, p3x);
+
+            float max_x = Math.max(p1x, p3x);
+            float min_y = Math.min(p1y, p3y);
+
+            int hits_this_round = 0;
+            //check bounding boxes
+            if(max_x >= 0)
+            {
+                if(p1y*p3y <= 0)
+                {
+                    if(min_y < 0)
+                    {
+                        //if is actually just a normalized linear segment
+                        if(p3x == p2x && p3y == p2y)
+                        {
+                            float dx = p1x - p3x;
+                            float dy = p1y - p3y;
+                            float hit_x = dx/dy*(0 - p1y) + p1x;
+
+                            if(hit_x >= 0)
+                            {
+                                if(allow_boundary != POINT_IN_SHAPE_BOUNDARY_DONT_CARE && hit_x == 0)
+                                    return allow_boundary == POINT_IN_SHAPE_WITH_BOUNDARY;
+                                hits_this_round += 1;
+                            }
+                        }
+                        else
+                        {
+                            //find roots between the quadratic and the x axis
+                            // (we reuse intersection just because we can)
+                            Splines.bezier_inv(intersections, p1y, p2y, p3y, 0);
+
+                            //filter to keep only the hits in the accepted
+                            // [0, lenx] or [lenx, 0] ranges
+                            int hit_count = 0;
+                            for(int k = 0; k < intersections.number; k++)
+                            {
+                                float hit1_x = Splines.bezier(p1x, p2x, p3x, intersections.rs[k]);
+                                if(0 <= hit1_x)
+                                {
+                                    if(allow_boundary != POINT_IN_SHAPE_BOUNDARY_DONT_CARE && hit1_x == 0)
+                                        return allow_boundary == POINT_IN_SHAPE_WITH_BOUNDARY;
+                                    hit_count += 1;
+                                }
+                            }
+
+                            assert hit_count <= 1;
+                            if(hit_count > 0)
+                                hits_this_round += 1;
+                        }
+                    }
+                    else //min_y == 0
+                    {
+                        //if is perfectly level and point is on it.
+                        if(allow_boundary != POINT_IN_SHAPE_BOUNDARY_DONT_CARE)
+                            if(p1y == p3y && p1x*p3x <= 0)
+                                return allow_boundary == POINT_IN_SHAPE_WITH_BOUNDARY;
+
+                    }
+                }
+            }
+
+            hits += hits_this_round;
+            p1x = p3x;
+            p1y = p3y;
+        }
+
+        return hits % 2 == 1;
+    }
+
+    public static boolean is_inside_polygon_hit(int allow_boundary, float[] x, float[] y, int[] polygon, float origin_x, float origin_y)
+    {
+        int num_hits = 0;
+        for(int i = 0; i < polygon.length; i++)
+        {
+            int j = i+1 < polygon.length ? i+1 : 0;
+            int p1i = polygon[i];
+            int p2i = polygon[j];
+
+            float p1x = x[p1i] - origin_x;
+            float p1y = y[p1i] - origin_y;
+
+            float p2x = x[p2i] - origin_x;
+            float p2y = y[p2i] - origin_y;
+
+            int hit_this_one = 0;
+            float max_x = Math.max(p1x, p2x);
+            float min_y = Math.min(p1y, p2y);
+            if(max_x >= 0)
+            {
+                if(p1y*p2y <= 0)
+                {
+                    if(min_y < 0)
+                    {
+                        float dx = p1x - p2x;
+                        float dy = p1y - p2y;
+                        float hit_x = dx/dy*(0 - p1y) + p1x;
+
+                        if(hit_x >= 0)
+                        {
+                            if(allow_boundary != POINT_IN_SHAPE_BOUNDARY_DONT_CARE && hit_x == 0)
+                                return allow_boundary == POINT_IN_SHAPE_WITH_BOUNDARY;
+                            hit_this_one += 1;
+                        }
+                    }
+                    else
+                    {
+                        assert min_y == 0;
+                        if(allow_boundary != POINT_IN_SHAPE_BOUNDARY_DONT_CARE)
+                            if(p1y == p2y && p1x*p2x <= 0)
+                                return allow_boundary == POINT_IN_SHAPE_WITH_BOUNDARY;
+                    }
+                }
+            }
+
+            num_hits += hit_this_one;
+        }
+
+        return num_hits % 2 == 1;
+    }
+
+
     static final int RAYCAST_ALLOW_P0 = 1;
     static final int RAYCAST_ALLOW_P1 = 2;
     static final int RAYCAST_ALLOW_ENDPOINTS = RAYCAST_ALLOW_P0 | RAYCAST_ALLOW_P1;
@@ -299,100 +479,6 @@ public final class Triangulate {
     public static float raycast_x_line(int allow_endpoints, float origin_x, float origin_y, float p0x, float p0y, float p1x, float p1y)
     {
         return raycast_x_line(allow_endpoints, p0x - origin_x, p1y - origin_y, p1x - origin_x, p1y - origin_y) + origin_x;
-    }
-
-    public static boolean is_inside_polygon(boolean allow_boundary, float[] x, float[] y, int[] polygon, float origin_x, float origin_y)
-    {
-        //we cannot raycast against each line independently in this case.
-        //Consider the following case (raycasting from x):
-        //
-        //  o---------------------------l
-        //  |                            \
-        //  |  x-->  b-----c-----d        g
-        //  |        |           |       /
-        //  o--------a           e------f
-        //
-        //obviously x is inside the polygon yet if we did optimistic
-        // hit detection (where we would consider a hit if intersects at least
-        // one end point) we would get 4 hits - thus by the standard
-        // odd inside, even outside, x would lie outside!
-        //
-        // Intuitively we know that the hit against corner of the a-b line
-        // should not be counted while the hit against f-g line should.
-        // Why is this the case? Because the line after a-b doesnt
-        // "go anywhere" while the line f-g continues up to l!
-        //
-        // This yields the following algorithm for hit detection:
-        //   if hits a line not in at vertices:
-        //       then is a hit.
-        //   if hits a line at the dest vertex: (**)
-        //       lookup that vertex's prev and next neighbours
-        //       if exactly one of prev and next is above and
-        //          exactly one is below the ray (strict inequalities)
-        //             then is a hit.
-        //
-        //   (**): We could also allow source vertex but since we
-        //         iterate all lines, we would count such vertex
-        //         hit twice.
-        //
-        // This means that:
-        // - b,e fails because one neighbour is on the the ray.
-        // - c fails because both neighbours are on the ray
-        // - g succeeds.
-
-        int num_hits = 0;
-        for(int i = 0; i < polygon.length; i++)
-        {
-            int j = i+1 < polygon.length ? i+1 : 0;
-            int p1i = polygon[i];
-            int p2i = polygon[j];
-
-            float p1x = x[p1i] - origin_x;
-            float p1y = y[p1i] - origin_y;
-
-            float p2x = x[p2i] - origin_x;
-            float p2y = y[p2i] - origin_y;
-
-            int hit_this_one = 0;
-            float eps = 0; //Note: maybe this will require tweaking!
-            float max_x = Math.max(p1x, p2x);
-            if(max_x >= 0)
-            {
-                if(p1y*p2y < 0)
-                {
-                    float dx = p1x - p2x;
-                    float dy = p1y - p2y;
-                    float hit_x = dx/dy*(0 - p1y) + p1x;
-                    //if we are directly on the line then
-                    // we are on the boundary
-                    if(hit_x == 0)
-                        return allow_boundary;
-                    else if(hit_x > 0)
-                        hit_this_one += 1;
-                }
-                else if(p1y*p2y == 0)
-                {
-                    //line is horizontal and ray is inside
-                    //it then we are on boudnary
-                    if(p1y == p2y && p1x*p2x <= 0)
-                        return allow_boundary;
-
-                    //edge condition discussed above
-                    if(p2y == 0)
-                    {
-                        int k = j+1 < polygon.length ? j+1 : 0;
-                        int p3i = polygon[k];
-                        float p3y = y[p3i] - origin_y;
-                        if(p1y*p3y < 0)
-                            hit_this_one = 1;
-                    }
-                }
-            }
-
-            num_hits += hit_this_one;
-        }
-
-        return num_hits % 2 == 1;
     }
 
     public static final class Raycast_Result {
@@ -530,41 +616,53 @@ public final class Triangulate {
                 int[] indices1 = {2, 0, 1};
                 int[] indices2 = {1, 2, 0};
 
+                float[] degenrate_xs = {x1, x1, x2, x2, x3, x3};
+                float[] degenrate_ys = {y1, y1, y2, y2, y3, y3};
+
                 //test all permutations
                 {
                     boolean is_interior = is_in_triangle_interior(xs, ys, 0, 1, 2, 3);
                     boolean is_boundary = is_in_triangle_with_boundary(xs, ys, 0, 1, 2, 3);
-                    boolean is_inside_polygon_interior = is_inside_polygon(false, xs, ys, indices0, px, py);
-                    boolean is_inside_polygon_boundary = is_inside_polygon(true, xs, ys, indices0, px, py);
+                    boolean is_inside_polygon_hit_interior = is_inside_polygon_hit(POINT_IN_SHAPE_INTERIOR, xs, ys, indices0, px, py);
+                    boolean is_inside_polygon_hit_boundary = is_inside_polygon_hit(POINT_IN_SHAPE_WITH_BOUNDARY, xs, ys, indices0, px, py);
+                    boolean is_inside_polygon_winding_interior = is_inside_polygon_winding(POINT_IN_SHAPE_INTERIOR, xs, ys, 0, 3, px, py);
+                    boolean is_inside_polygon_winding_boundary = is_inside_polygon_winding(POINT_IN_SHAPE_WITH_BOUNDARY, xs, ys, 0, 3, px, py);
+
+                    boolean is_inside_normalized_bezier_interior = is_inside_normalized_bezier(POINT_IN_SHAPE_INTERIOR, degenrate_xs, degenrate_ys, 0, 6, px, py);
+                    boolean is_inside_normalized_bezier_boundary = is_inside_normalized_bezier(POINT_IN_SHAPE_WITH_BOUNDARY, degenrate_xs, degenrate_ys, 0, 6, px, py);
 
                     assert interior == is_interior;
                     assert boundary == is_boundary;
-                    assert is_inside_polygon_interior == is_interior;
-                    assert is_inside_polygon_boundary == boundary;
+                    assert is_inside_polygon_hit_interior == interior;
+                    assert is_inside_polygon_hit_boundary == boundary;
+                    assert is_inside_polygon_winding_interior == interior;
+                    assert is_inside_polygon_winding_boundary == boundary;
+                    assert is_inside_normalized_bezier_interior == interior;
+                    assert is_inside_normalized_bezier_boundary == boundary;
                 }
 
                 {
                     boolean is_interior = is_in_triangle_interior(xs, ys, 1, 2, 0, 3);
                     boolean is_boundary = is_in_triangle_with_boundary(xs, ys, 1, 2, 0, 3);
-                    boolean is_inside_polygon_interior = is_inside_polygon(false, xs, ys, indices1, px, py);
-                    boolean is_inside_polygon_boundary = is_inside_polygon(true, xs, ys, indices1, px, py);
+                    boolean is_inside_polygon_hit_interior = is_inside_polygon_hit(POINT_IN_SHAPE_INTERIOR, xs, ys, indices1, px, py);
+                    boolean is_inside_polygon_hit_boundary = is_inside_polygon_hit(POINT_IN_SHAPE_WITH_BOUNDARY, xs, ys, indices1, px, py);
 
                     assert interior == is_interior;
                     assert boundary == is_boundary;
-                    assert is_inside_polygon_interior == is_interior;
-                    assert is_inside_polygon_boundary == boundary;
+                    assert is_inside_polygon_hit_interior == is_interior;
+                    assert is_inside_polygon_hit_boundary == boundary;
                 }
 
                 {
                     boolean is_interior = is_in_triangle_interior(xs, ys, 2, 0, 1, 3);
                     boolean is_boundary = is_in_triangle_with_boundary(xs, ys, 2, 0, 1, 3);
-                    boolean is_inside_polygon_interior = is_inside_polygon(false, xs, ys, indices2, px, py);
-                    boolean is_inside_polygon_boundary = is_inside_polygon(true, xs, ys, indices2, px, py);
+                    boolean is_inside_polygon_hit_interior = is_inside_polygon_hit(POINT_IN_SHAPE_INTERIOR, xs, ys, indices2, px, py);
+                    boolean is_inside_polygon_hit_boundary = is_inside_polygon_hit(POINT_IN_SHAPE_WITH_BOUNDARY, xs, ys, indices2, px, py);
 
                     assert interior == is_interior;
                     assert boundary == is_boundary;
-                    assert is_inside_polygon_interior == is_interior;
-                    assert is_inside_polygon_boundary == boundary;
+                    assert is_inside_polygon_hit_interior == is_interior;
+                    assert is_inside_polygon_hit_boundary == boundary;
                 }
             }
         }
