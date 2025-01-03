@@ -61,6 +61,19 @@ public final class Splines {
         return kappa;
     }
 
+    //returns t of the extrema or -1 if there is none
+    public static float bezier_extreme(float p1, float p2, float p3)
+    {
+        //dB(t)/dt = 2*t*(p3 - 2*p2 + p1) + 2*(p2 - p1) = 0
+        //dB(t)/dt = 2*a*t + 2*b = 0 => t = -b/a
+        float a = (p3 - 2*p2 + p1);
+        float b = p2 - p1;
+
+        if(a == 0)
+            return -1;
+        return -b/a;
+    }
+
     //returns scale t of the first line such that
     // off1 + t*dir1 = off2 + s*dir2
     // for some other scale s
@@ -403,8 +416,8 @@ public final class Splines {
 
         s2.x1 = s1.x3;
         s2.y1 = s1.y3;
-        s1.x2 = (1-z)*x2 + z*x3;
-        s1.y2 = (1-z)*y2 + z*y3;
+        s2.x2 = (1-z)*x2 + z*x3;
+        s2.y2 = (1-z)*y2 + z*y3;
         s2.x3 = x3;
         s2.y3 = y3;
     }

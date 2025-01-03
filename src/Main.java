@@ -4,8 +4,10 @@ import static org.lwjgl.opengl.GL43C.*;
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.system.MemoryUtil.*;
 
+import java.lang.Math;
 import java.nio.IntBuffer;
 import java.util.ArrayList;
+import java.util.Arrays;
 
 import org.joml.*;
 import org.lwjgl.glfw.GLFWVidMode;
@@ -27,7 +29,7 @@ public class Main {
     public static final int MB = 1024*1024;
     public static final int GB = 1024*1024*1024;
 
-    public static final class Geometry
+    public static final class Triangulated_Glyph
     {
         public float[] xs;
         public float[] ys;
@@ -38,9 +40,156 @@ public class Main {
         public Triangulate.AABB_Vertices aabb;
     }
 
-    /*
-    public static Geometry geometry_from_glyph(Font_Parser.Glyph glyph, float units_per_em)
+    public static final class Normalized_Beziere
     {
+        public float[] xs;
+        public float[] ys;
+        public int length;
+    }
+
+    public static Normalized_Beziere normalize_bezier(float[] xs, float[] ys, int from_i, int to_i)
+    {
+        class H {
+            static void push_segment(Normalized_Beziere out, float x1, float y1, float x2, float y2)
+            {
+                if(out.length + 2 > out.xs.length) {
+                    out.xs = Arrays.copyOf(out.xs, out.xs.length*5/4 + 8);
+                    out.ys = Arrays.copyOf(out.ys, out.ys.length*5/4 + 8);
+                }
+
+                //control point
+                out.xs[out.length] = x1;
+                out.ys[out.length] = y1;
+                //on curve point
+                out.xs[out.length + 1] = x2;
+                out.ys[out.length + 1] = y2;
+                out.length += 2;
+            }
+        }
+
+        assert xs.length % 2 == 0;
+        assert ys.length % 2 == 0;
+        assert ys.length == xs.length;
+
+        float[] temp_xs = new float[3];
+        float[] temp_ys = new float[3];
+        int temp_count;
+
+        Splines.Quad_Bezier b1 = new Splines.Quad_Bezier();
+        Splines.Quad_Bezier b2 = new Splines.Quad_Bezier();
+        Normalized_Beziere out = new Normalized_Beziere();
+        //normalize in the x direction
+        {
+            out.xs = new float[to_i - from_i + 8];
+            out.ys = new float[to_i - from_i + 8];
+            out.length = 0;
+
+            int j = to_i - 1;
+            for(int i = from_i; i < to_i; i += 2)
+            {
+                float x1 = xs[j];
+                float y1 = ys[j];
+                float x2 = xs[i];
+                float y2 = ys[i];
+                float x3 = xs[i+1];
+                float y3 = ys[i+1];
+
+                //if control point is extreme - either bigger then both or
+                // smaller then both. If both are smaller then the product below
+                // is positive. If both are bigger then again its positive.
+                if((x1 - x2)*(x3 - x2) > 0)
+                {
+                    float t = Splines.bezier_extreme(x1, x2, x3);
+                    assert t != -1;
+
+                    Splines.bezier_split(b1, b2, x1, y1, x2, y2, x3, y3, t);
+                    H.push_segment(out, b1.x2, b1.y2, b1.x3, b1.y3);
+                    H.push_segment(out, b2.x2, b2.y2, b2.x3, b2.y3);
+                }
+                else
+                    H.push_segment(out, x2, y2, x3, y3);
+
+                j = i;
+            }
+        }
+
+        //make the last result the new input parameters
+        xs = out.xs;
+        ys = out.ys;
+        from_i = 0;
+        to_i = out.length;
+
+        //normalize in the y direction
+        {
+            out.xs = new float[to_i - from_i + 8];
+            out.ys = new float[to_i - from_i + 8];
+            out.length = 0;
+
+            int j = to_i - 1;
+            for(int i = from_i; i < to_i; i += 2)
+            {
+                float x1 = xs[j];
+                float y1 = ys[j];
+                float x2 = xs[i];
+                float y2 = ys[i];
+                float x3 = xs[i+1];
+                float y3 = ys[i+1];
+
+                if((y1 - y2)*(y3 - y2) > 0)
+                {
+                    float t = Splines.bezier_extreme(y1, y2, y3);
+                    assert t != -1;
+                    Splines.bezier_split(b1, b2, x1, y1, x2, y2, x3, y3, t);
+                    H.push_segment(out, b1.x2, b1.y2, b1.x3, b1.y3);
+                    H.push_segment(out, b2.x2, b2.y2, b2.x3, b2.y3);
+                }
+                else
+                    H.push_segment(out, x2, y2, x3, y3);
+
+                j = i;
+            }
+        }
+
+        return out;
+    }
+
+    public boolean[] rasterize_glyph(Font_Parser.Glyph glyph, int resx, int resy, float units_per_em)
+    {
+        boolean[] bitmap = new boolean[resx*resy];
+
+        for(int k = 0; k < glyph.solids.length + glyph.holes.length; k++)
+        {
+            Font_Parser.Countour countour = k < glyph.solids.length
+                    ? glyph.solids[k]
+                    : glyph.holes[k - glyph.solids.length];
+
+            boolean is_solid = k < glyph.solids.length;
+            float xs[] = new float[countour.xs.length];
+            float ys[] = new float[countour.ys.length];
+            for(int i = 0; i < countour.xs.length; i++) {
+                xs[i] = (float) countour.xs[i]/units_per_em;
+                ys[i] = (float) countour.ys[i]/units_per_em;
+            }
+
+            for(int xi = 0; xi < resx; xi++)
+                for(int yi = 0; yi < resy; yi++)
+                {
+                    float x = xi*units_per_em;
+                    float y = xi*units_per_em;
+
+                    Triangulate.is_inside_normalized_bezier(
+                        Triangulate.POINT_IN_SHAPE_BOUNDARY_DONT_CARE, xs, ys, 0, xs.length, x, y);
+                }
+
+            return bitmap;
+        }
+    }
+
+    /*
+    public static Geometry trianglulate_glyph(Font_Parser.Glyph glyph, float units_per_em)
+    {
+
+
         assert glyph.points_x.length == glyph.points_y.length;
         assert glyph.points_x.length == glyph.points_on_curve.length;
         assert glyph.contour_end_indices.length > 0;
@@ -55,112 +204,9 @@ public class Main {
         for(int i = 0; i < glyph.points_y.length; i++)
             ys[i] = glyph.points_y[i]/units_per_em;
 
-        for(int j = 0; j < glyph.contour_ends.length; j++)
-        {
-            int i_start = j == 0 ? 0 : glyph.contour_ends[j - 1];
-            int i_end = glyph.contour_ends[j];
-            int range = i_end - i_start;
-            if(range <= 1)
-                continue;
-
-            //reverse orientation to make it easier to work with
-
-            //calculate signed area of this contour in
-            // treating all beziers as straight lines.
-            //The signed are will be positive for when the indices
-            // are oriented counter clockwise
-            float signed_area = 0;
-            for(int i = 0; i < range;)
-            {
-                int i0 = i_start + i;
-                int i1 = i_start + ((i+1) % range);
-
-                int p0 = i0;
-                int p1 = i1;
-                i += 1;
-
-                assert glyph.points_on_curve[i0];
-                //if is a bezier ignore the control vertex
-                // and instead use third point
-                if(glyph.points_on_curve[i1] == false)
-                {
-                    int i2 = i_start + ((i+2) % range);
-                    assert glyph.points_on_curve[i2];
-
-                    p1 = i2;
-                    i += 1;
-                }
-
-                signed_area += xs[p0] * ys[p1] - xs[p1] * ys[p0];
-            }
-
-            boolean is_hole = signed_area < 0;
-            boolean is_polygon = signed_area >= 0;
-            assert is_hole == false;
-
-            IntArray polygon_indices = new IntArray();
-            IntArray bezier_indices_out_bend = new IntArray();
-            IntArray bezier_indices_in_bend = new IntArray();
-
-            for(int i = 0; i <= range;)
-            {
-                int i0 = i_start + ((i+0) % range);
-                int i1 = i_start + ((i+1) % range);
-                int i2 = i_start + ((i+2) % range);
-                int increment = 0;
-
-                assert glyph.points_on_curve[i0];
-
-                //if is a bezier
-                if(glyph.points_on_curve[i1] == false)
-                {
-                    assert glyph.points_on_curve[i2];
-
-                    //Pessimistically approximate the bezier using straight lines.
-                    // That is replace it with straight lines such that the are of the
-                    // resulting shape will be less than the original filled bezier.
-
-                    //if is bend outwards approximate using straight line
-                    // (reduce D shape curve to line)
-                    if(Triangulate.counter_clockwise_is_convex(xs, ys, i0, i1, i2) == is_polygon)
-                    {
-                        polygon_indices.push(i0);
-
-                        bezier_indices_out_bend.push(i0);
-                        bezier_indices_out_bend.push(i1);
-                        bezier_indices_out_bend.push(i2);
-                    }
-                    //is is bend inwards approximate using V shape
-                    else
-                    {
-                        polygon_indices.push(i0);
-                        polygon_indices.push(i1);
-
-                        bezier_indices_in_bend.push(i0);
-                        bezier_indices_in_bend.push(i1);
-                        bezier_indices_in_bend.push(i2);
-                    }
-
-                    //add the bezier
-                    increment = 2;
-                }
-                //is a simple line
-                else
-                {
-                    polygon_indices.push(i0);
-                    increment = 1;
-                }
-
-                i += increment;
-            }
-
-
-
-        }
-
         return new Geometry();
     }
-    */
+     */
 
     private void run() {
         ArrayList<Font_Parser.Font_Log> logs = new ArrayList<>();
