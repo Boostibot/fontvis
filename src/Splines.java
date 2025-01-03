@@ -422,6 +422,35 @@ public final class Splines {
         s2.y3 = y3;
     }
 
+    //same as split bezier_split except assumes that the point z is an extreme in x, or y dimension,
+    // thus reuses some of the computations and prohibits floating point errors
+    public static void bezier_split_at_extreme(boolean is_extreme_y, Quad_Bezier s1, Quad_Bezier s2, float x1, float y1, float x2, float y2, float x3, float y3, float z)
+    {
+        s1.x3 = (1-z)*(1-z)*x1 + 2*(1-z)*z*x2 + z*z*x3;
+        s1.y3 = (1-z)*(1-z)*y1 + 2*(1-z)*z*y2 + z*z*y3;
+        s2.x1 = s1.x3;
+        s2.y1 = s1.y3;
+
+        if(is_extreme_y) {
+            s1.x2 = (1-z)*x1 + z*x2;
+            s2.x2 = (1-z)*x2 + z*x3;
+            s1.y2 = s1.y3;
+            s2.y2 = s1.y3;
+        }
+        else {
+            s1.y2 = (1-z)*y1 + z*y2;
+            s2.y2 = (1-z)*y2 + z*y3;
+            s1.x2 = s1.x3;
+            s2.x2 = s1.x3;
+        }
+
+        s1.x1 = x1;
+        s1.y1 = y1;
+        s2.x3 = x3;
+        s2.y3 = y3;
+    }
+
+
     public static void test_some_splines()
     {
         class H {

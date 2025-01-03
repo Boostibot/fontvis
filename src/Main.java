@@ -71,10 +71,6 @@ public class Main {
         assert ys.length % 2 == 0;
         assert ys.length == xs.length;
 
-        float[] temp_xs = new float[3];
-        float[] temp_ys = new float[3];
-        int temp_count;
-
         Splines.Quad_Bezier b1 = new Splines.Quad_Bezier();
         Splines.Quad_Bezier b2 = new Splines.Quad_Bezier();
         Normalized_Beziere out = new Normalized_Beziere();
@@ -97,14 +93,20 @@ public class Main {
                 //if control point is extreme - either bigger then both or
                 // smaller then both. If both are smaller then the product below
                 // is positive. If both are bigger then again its positive.
+                boolean is_not_extreme1 = (x1 - x2)*(x3 - x2) <= 0;
+                boolean is_not_extreme2 = Math.min(x1, x3) <= x2 && x2 <= Math.max(x1, x3);
+                assert is_not_extreme1 == is_not_extreme2;
+
                 if((x1 - x2)*(x3 - x2) > 0)
                 {
                     float t = Splines.bezier_extreme(x1, x2, x3);
-                    assert t != -1;
-
-                    Splines.bezier_split(b1, b2, x1, y1, x2, y2, x3, y3, t);
+                    assert 0 < t && t < 1;
+                    Splines.bezier_split_at_extreme(false, b1, b2, x1, y1, x2, y2, x3, y3, t);
                     H.push_segment(out, b1.x2, b1.y2, b1.x3, b1.y3);
                     H.push_segment(out, b2.x2, b2.y2, b2.x3, b2.y3);
+
+                    assert (b1.x1 - b1.x2)*(b1.x3 - b1.x2) <= 0;
+                    assert (b2.x1 - b2.x2)*(b2.x3 - b2.x2) <= 0;
                 }
                 else
                     H.push_segment(out, x2, y2, x3, y3);
@@ -125,11 +127,11 @@ public class Main {
             out.ys = new float[to_i - from_i + 8];
             out.length = 0;
 
-            int j = to_i - 1;
+            int j = to_i - 2;
             for(int i = from_i; i < to_i; i += 2)
             {
-                float x1 = xs[j];
-                float y1 = ys[j];
+                float x1 = xs[j+1];
+                float y1 = ys[j+1];
                 float x2 = xs[i];
                 float y2 = ys[i];
                 float x3 = xs[i+1];
@@ -138,10 +140,15 @@ public class Main {
                 if((y1 - y2)*(y3 - y2) > 0)
                 {
                     float t = Splines.bezier_extreme(y1, y2, y3);
-                    assert t != -1;
-                    Splines.bezier_split(b1, b2, x1, y1, x2, y2, x3, y3, t);
+                    assert 0 < t && t < 1;
+                    Splines.bezier_split_at_extreme(true, b1, b2, x1, y1, x2, y2, x3, y3, t);
                     H.push_segment(out, b1.x2, b1.y2, b1.x3, b1.y3);
                     H.push_segment(out, b2.x2, b2.y2, b2.x3, b2.y3);
+
+                    assert (b1.y1 - b1.y2)*(b1.y3 - b1.y2) <= 0;
+                    assert (b2.y1 - b2.y2)*(b2.y3 - b2.y2) <= 0;
+                    assert (b1.x1 - b1.x2)*(b1.x3 - b1.x2) <= 0;
+                    assert (b2.x1 - b2.x2)*(b2.x3 - b2.x2) <= 0;
                 }
                 else
                     H.push_segment(out, x2, y2, x3, y3);
@@ -150,10 +157,32 @@ public class Main {
             }
         }
 
+        //assert is normalized
+        {
+            int j = out.length - 2;
+            for(int i = 0; i < out.length; i += 2)
+            {
+                float x1 = out.xs[j+1];
+                float y1 = out.ys[j+1];
+                float x2 = out.xs[i];
+                float y2 = out.ys[i];
+                float x3 = out.xs[i+1];
+                float y3 = out.ys[i+1];
+
+                boolean is_not_extreme1_x = (x1 - x2)*(x3 - x2) <= 0;
+                assert is_not_extreme1_x;
+
+                boolean is_not_extreme1_y = (y1 - y2)*(y3 - y2) <= 0;
+                assert is_not_extreme1_y;
+
+                j = i;
+            }
+        }
+
         return out;
     }
 
-    public boolean[] rasterize_glyph(Font_Parser.Glyph glyph, int resx, int resy, float units_per_em)
+    public boolean[] rasterize_glyph(Font_Parser.Glyph glyph, int resx, int resy, float scale_x, float scale_y, float units_per_em)
     {
         boolean[] bitmap = new boolean[resx*resy];
 
@@ -171,18 +200,25 @@ public class Main {
                 ys[i] = (float) countour.ys[i]/units_per_em;
             }
 
-            for(int xi = 0; xi < resx; xi++)
-                for(int yi = 0; yi < resy; yi++)
+            Normalized_Beziere normalized = normalize_bezier(xs, ys, 0, xs.length);
+            for(int yi = 0; yi < resy; yi++)
+                for(int xi = 0; xi < resx; xi++)
                 {
-                    float x = xi*units_per_em;
-                    float y = xi*units_per_em;
+                    float x = (float) xi/resx*scale_x;
+                    float y = (float) yi/resy*scale_y;
 
-                    Triangulate.is_inside_normalized_bezier(
-                        Triangulate.POINT_IN_SHAPE_BOUNDARY_DONT_CARE, xs, ys, 0, xs.length, x, y);
+                    boolean inside = Triangulate.is_inside_normalized_bezier(
+                        Triangulate.POINT_IN_SHAPE_BOUNDARY_DONT_CARE,
+                        normalized.xs, normalized.ys, 0, normalized.length, x, y);
+
+                    if(is_solid)
+                        bitmap[xi + yi*resx] = bitmap[xi + yi*resx] || inside;
+                    else
+                        bitmap[xi + yi*resx] = bitmap[xi + yi*resx] && !inside;
                 }
-
-            return bitmap;
         }
+
+        return bitmap;
     }
 
     /*
@@ -246,8 +282,8 @@ public class Main {
             if (viewing) {
                 float deltaX = (float) xpos - mouseX;
                 float deltaY = (float) ypos - mouseY;
-                position.x += deltaX/height;
-                position.y -= deltaY/height;
+                position.x += deltaX/width*2;
+                position.y -= deltaY/height*2;
 
                 //orientation.rotateLocalX(deltaY * 0.01f).rotateLocalY(deltaX * 0.01f);
             }
@@ -294,9 +330,23 @@ public class Main {
         glyph_buffer.grows = false;
 
 
+        {
+            int resx = 200;
+            int resy = 200;
+            Font_Parser.Glyph glyph = font.glyphs.get("a".codePointAt(0));
+            float scalex = 1.0f/font.units_per_em;
+            float scaley = 1.0f/font.units_per_em;
+            boolean[] raster = rasterize_glyph(glyph, resx, resy, 1, 1, font.units_per_em);
+
+            for(int yi = 0; yi < resy; yi++)
+                for(int xi = 0; xi < resx; xi++)
+                    if(raster[xi + yi*resx])
+                        glyph_buffer.submit_circle((float)xi/resx, (float)yi/resy, 0.5f/resx, 0x0, null);
+        }
 
 
-        glyph_buffer.submit_text_countour(font, "obaH", 1.0f/font.units_per_em, 0.05f, 0.05f, 1, 0x80FFFFFF, null);
+
+//        glyph_buffer.submit_text_countour(font, "obaH", 1.0f/font.units_per_em, 0.05f, 0.05f, 1, 0x80FFFFFF, null);
 
         Matrix4f view_matrix = new Matrix4f();
         Matrix3f transf_matrix = new Matrix3f();

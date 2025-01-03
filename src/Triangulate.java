@@ -315,8 +315,8 @@ public final class Triangulate {
             //assert that bezier is normalized:
             // the control point is never an extremity
             //This allows us to write a lot simpler code
-            assert Math.min(p1y, p3y) <= p2y && p2y <= Math.max(p1y, p3y);
             assert Math.min(p1x, p3x) <= p2x && p2x <= Math.max(p1x, p3x);
+            assert Math.min(p1y, p3y) <= p2y && p2y <= Math.max(p1y, p3y);
 
             float max_x = Math.max(p1x, p3x);
             float min_y = Math.min(p1y, p3y);
