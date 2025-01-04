@@ -365,14 +365,13 @@ public final class Triangulate {
                 {
                     if(p1y != p3y)
                     {
-                        //if we care about precision and is by convention linear segment
-                        // use the more accurate line intersection
-                        if(allow_boundary != POINT_IN_SHAPE_BOUNDARY_DONT_CARE && p3x == p2x && p3y == p2y)
+                        //if  is by convention linear segment use the more accurate anc cheaper line intersection
+                        if(p3x == p2x && p3y == p2y)
                         {
                             float cross = cross_product_z(p1x, p1y, p3x, p3y);
                             float sign = p3y - p1y;
                             if(cross*sign >= 0) {
-                                if(cross == 0)
+                                if(allow_boundary != POINT_IN_SHAPE_BOUNDARY_DONT_CARE && cross == 0)
                                     return allow_boundary == POINT_IN_SHAPE_WITH_BOUNDARY;
                                 hits += 1;
                             }
@@ -428,7 +427,8 @@ public final class Triangulate {
                             //We know t must exist => clamp it to the valid range
                             t = Math.clamp(t, 0, 1);
 
-                            float hit1_x = Splines.bezier(p1x, p2x, p3x, t);
+                            //evaluate bezier x at t
+                            float hit1_x = t*t*p3x + 2*t*(1-t)*p2x + (1-t)*(1-t)*p1x;
                             if(-hit_eps <= hit1_x)
                                 hits += 1;
                         }
