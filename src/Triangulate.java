@@ -76,6 +76,7 @@ public final class Triangulate {
         return aabb;
     }
 
+    /*
     public static IntArray connect_holes(float[] xs, float[] ys, int[] indices, int[][] holes)
     {
         if(indices.length == 0)
@@ -169,7 +170,7 @@ public final class Triangulate {
 
         return out;
     }
-
+    */
     public static IntArray triangulate(float[] xs, float[] ys, int[] indices)
     {
         IntArray triangle_indices = IntArray.with_capacity(3*indices.length);
@@ -268,22 +269,25 @@ public final class Triangulate {
             float p2x = x[i] - origin_x;
             float p2y = y[i] - origin_y;
 
-            float cross = cross_product_z(p1x, p1y, p2x, p2y, 0, 0);
-            // Check if the point lies on the current edge
-            if(allow_boundary != POINT_IN_SHAPE_BOUNDARY_DONT_CARE)
-                if(cross == 0 //if forms a zero area triangle with point p
-                    && p1x*p2x <= 0  //if px is between p1x and p2x (or equal to one)
-                    && p1y*p2y <= 0) //similarly for py
-                    return allow_boundary == POINT_IN_SHAPE_WITH_BOUNDARY;
+            //early out
+            if(p1y*p2y <= 0)
+            {
+                float cross = cross_product_z(p1x, p1y, p2x, p2y, 0, 0);
+                // Check if the point lies on the current edge
+                if(allow_boundary != POINT_IN_SHAPE_BOUNDARY_DONT_CARE)
+                    if(cross == 0 //if forms a zero area triangle with point p
+                        && p1x*p2x <= 0)  //if px is between p1x and p2x (or equal to one)
+                        return allow_boundary == POINT_IN_SHAPE_WITH_BOUNDARY;
 
-            // Calculate the cross product to determine winding direction
-            if (p1y <= 0) {
-                if (p2y > 0 && cross > 0)
-                    winding_number++;
-            }
-            else {
-                if (p2y <= 0 && cross < 0)
-                    winding_number--;
+                // Calculate the cross product to determine winding direction
+                if (p1y <= 0) {
+                    if (p2y > 0 && cross > 0)
+                        winding_number++;
+                }
+                else {
+                    if (p2y <= 0 && cross < 0)
+                        winding_number--;
+                }
             }
 
             p1x = p2x;
@@ -293,15 +297,52 @@ public final class Triangulate {
         return winding_number != 0;
     }
 
+    public static boolean is_inside_polygon_hit(int allow_boundary, float[] x, float[] y, int from_i, int to_i, float origin_x, float origin_y)
+    {
+        int num_hits = 0;
+        float p1x = x[to_i - 1] - origin_x;
+        float p1y = y[to_i - 1] - origin_y;
+        for(int i = from_i; i < to_i; i++)
+        {
+            float p2x = x[i] - origin_x;
+            float p2y = y[i] - origin_y;
+
+            if(Math.max(p1x, p2x) >= 0)
+            {
+                if(p1y*p2y <= 0)
+                {
+                    float cross = cross_product_z(p1x, p1y, p2x, p2y);
+                    float sign = p2y - p1y;
+                    if(sign != 0)
+                    {
+                        if(cross*sign >= 0) {
+                            if(allow_boundary != POINT_IN_SHAPE_BOUNDARY_DONT_CARE && cross == 0)
+                                return allow_boundary == POINT_IN_SHAPE_WITH_BOUNDARY;
+                            num_hits += 1;
+                        }
+                    }
+                    else if(allow_boundary != POINT_IN_SHAPE_BOUNDARY_DONT_CARE && p1x*p2x <= 0)
+                        return allow_boundary == POINT_IN_SHAPE_WITH_BOUNDARY;
+                }
+            }
+
+            p1x = p2x;
+            p1y = p2y;
+        }
+
+        return num_hits % 2 == 1;
+    }
+
     public static boolean is_inside_normalized_bezier(int allow_boundary, float[] x, float[] y, int from_i, int to_i, float origin_x, float origin_y)
     {
-        //Note: to ensure no numerical accuracy errors, degenerate beziers (straight lines)
-        // should also be in normalized form: the control point should be equal to the first
-        // point. This ensures things cancel out nicely.
         if(from_i + 1 >= to_i || (to_i - from_i) % 2 != 0)
             return false;
 
-        Splines.Intersections intersections = new Splines.Intersections();
+        //this has no effect on the global correctness of the algorithm
+        // ie setting this wrong will not cause any error stripes, but
+        // it will allow pixels right on the boundary to be counted in
+        float hit_eps = (float) 1e-7;
+
         int hits = 0;
         float p1x = x[to_i - 1] - origin_x;
         float p1y = y[to_i - 1] - origin_y;
@@ -315,71 +356,89 @@ public final class Triangulate {
             //assert that bezier is normalized:
             // the control point is never an extremity
             //This allows us to write a lot simpler code
-            assert Math.min(p1x, p3x) <= p2x && p2x <= Math.max(p1x, p3x);
             assert Math.min(p1y, p3y) <= p2y && p2y <= Math.max(p1y, p3y);
 
-            float max_x = Math.max(p1x, p3x);
-            float min_y = Math.min(p1y, p3y);
-
-            int hits_this_round = 0;
             //check bounding boxes
-            if(max_x >= 0)
+            if(Math.max(p1x, p3x) >= 0)
             {
                 if(p1y*p3y <= 0)
                 {
-                    if(min_y < 0)
+                    if(p1y != p3y)
                     {
-                        //if is actually just a normalized linear segment
-                        if(p3x == p2x && p3y == p2y)
+                        //if we care about precision and is by convention linear segment
+                        // use the more accurate line intersection
+                        if(allow_boundary != POINT_IN_SHAPE_BOUNDARY_DONT_CARE && p3x == p2x && p3y == p2y)
                         {
-                            float dx = p1x - p3x;
-                            float dy = p1y - p3y;
-                            float hit_x = dx/dy*(0 - p1y) + p1x;
-
-                            if(hit_x >= 0)
-                            {
-                                if(allow_boundary != POINT_IN_SHAPE_BOUNDARY_DONT_CARE && hit_x == 0)
+                            float cross = cross_product_z(p1x, p1y, p3x, p3y);
+                            float sign = p3y - p1y;
+                            if(cross*sign >= 0) {
+                                if(cross == 0)
                                     return allow_boundary == POINT_IN_SHAPE_WITH_BOUNDARY;
-                                hits_this_round += 1;
+                                hits += 1;
                             }
                         }
                         else
                         {
-                            //find roots between the quadratic and the x axis
-                            // (we reuse intersection just because we can)
-                            Splines.bezier_inv(intersections, p1y, p2y, p3y, 0);
+                            //find roots between the quadratic bezier and the x axis
+                            // this just means finding t for which B(t)y = y (inv bezier).
+                            //Since origin is between p1y and p3y such solution must exist
+                            // and further because we have normalized bezier we know that this
+                            // solution is unique (normalized bezier means that there are no
+                            // parabolas. for each y exists unique x)
+                            //This lest us skip checking whether the solution t is valid
+                            // (ie if it lays inside the [0, 1] interval) and instead clamp it to the
+                            // [0, 1] interval. This gets rid of an array of numerical inaccuracy problems.
+                            float t = 0;
 
-                            //filter to keep only the hits in the accepted
-                            // [0, lenx] or [lenx, 0] ranges
-                            int hit_count = 0;
-                            for(int k = 0; k < intersections.number; k++)
+                            //get params to the quadratic formula
+                            float a = p3y - 2*p2y + p1y;
+                            float b = 2*(p2y - p1y);
+                            float c = p1y;
+                            float D = b*b - 4*a*c;
+
+                            if(a == 0)
                             {
-                                float hit1_x = Splines.bezier(p1x, p2x, p3x, intersections.rs[k]);
-                                if(0 <= hit1_x)
-                                {
-                                    if(allow_boundary != POINT_IN_SHAPE_BOUNDARY_DONT_CARE && hit1_x == 0)
-                                        return allow_boundary == POINT_IN_SHAPE_WITH_BOUNDARY;
-                                    hit_count += 1;
-                                }
+                                //if b = 0 and a = 0 then we get b1 = b2 = b3
+                                // which is a case of straight line handled outside this branch
+                                // so b will never be zero.
+                                assert b != 0;
+                                t = -c/b;
+                            }
+                            //We know that there must be a valid solution => D will not be negative
+                            //If it is as a result of floating point we just treat it as zero
+                            else if(D <= 0)
+                                t = -b/a/2;
+                            //In the quadratic formula we are trying to select t in [0, 1]
+                            // this depends on a,b,c. If one goes through the cases
+                            // for p1 > p3, one finds that we need to select -sqrtD.
+                            // Repeating this procedure fo p1 < p3 one find that we need +sqrtD
+                            else
+                            {
+                                float sqrtD = (float) Math.sqrt(D);
+                                if(p1y > p3y)
+                                    t = (-b - sqrtD)/a/2;
+                                else
+                                    t = (-b + sqrtD)/a/2;
                             }
 
-                            assert hit_count <= 1;
-                            if(hit_count > 0)
-                                hits_this_round += 1;
+                            //assert that our reasoning is correct and all errors are due to floating point
+                            float eps = (float) 1e-3;
+                            assert -eps < t && t < 1 + eps;
+
+                            //We know t must exist => clamp it to the valid range
+                            t = Math.clamp(t, 0, 1);
+
+                            float hit1_x = Splines.bezier(p1x, p2x, p3x, t);
+                            if(-hit_eps <= hit1_x)
+                                hits += 1;
                         }
                     }
-                    else //min_y == 0
-                    {
-                        //if is perfectly level and point is on it.
-                        if(allow_boundary != POINT_IN_SHAPE_BOUNDARY_DONT_CARE)
-                            if(p1y == p3y && p1x*p3x <= 0)
-                                return allow_boundary == POINT_IN_SHAPE_WITH_BOUNDARY;
-
-                    }
+                    else if(allow_boundary != POINT_IN_SHAPE_BOUNDARY_DONT_CARE)
+                        if(p1x*p3x <= 0)
+                            return allow_boundary == POINT_IN_SHAPE_WITH_BOUNDARY;
                 }
             }
 
-            hits += hits_this_round;
             p1x = p3x;
             p1y = p3y;
         }
@@ -387,147 +446,55 @@ public final class Triangulate {
         return hits % 2 == 1;
     }
 
-    public static boolean is_inside_polygon_hit(int allow_boundary, float[] x, float[] y, int[] polygon, float origin_x, float origin_y)
-    {
-        int num_hits = 0;
-        for(int i = 0; i < polygon.length; i++)
-        {
-            int j = i+1 < polygon.length ? i+1 : 0;
-            int p1i = polygon[i];
-            int p2i = polygon[j];
-
-            float p1x = x[p1i] - origin_x;
-            float p1y = y[p1i] - origin_y;
-
-            float p2x = x[p2i] - origin_x;
-            float p2y = y[p2i] - origin_y;
-
-            int hit_this_one = 0;
-            float max_x = Math.max(p1x, p2x);
-            float min_y = Math.min(p1y, p2y);
-            if(max_x >= 0)
-            {
-                if(p1y*p2y <= 0)
-                {
-                    if(min_y < 0)
-                    {
-                        float dx = p1x - p2x;
-                        float dy = p1y - p2y;
-                        float hit_x = dx/dy*(0 - p1y) + p1x;
-
-                        if(hit_x >= 0)
-                        {
-                            if(allow_boundary != POINT_IN_SHAPE_BOUNDARY_DONT_CARE && hit_x == 0)
-                                return allow_boundary == POINT_IN_SHAPE_WITH_BOUNDARY;
-                            hit_this_one += 1;
-                        }
-                    }
-                    else
-                    {
-                        assert min_y == 0;
-                        if(allow_boundary != POINT_IN_SHAPE_BOUNDARY_DONT_CARE)
-                            if(p1y == p2y && p1x*p2x <= 0)
-                                return allow_boundary == POINT_IN_SHAPE_WITH_BOUNDARY;
-                    }
-                }
-            }
-
-            num_hits += hit_this_one;
-        }
-
-        return num_hits % 2 == 1;
-    }
-
-
     static final int RAYCAST_ALLOW_P0 = 1;
     static final int RAYCAST_ALLOW_P1 = 2;
     static final int RAYCAST_ALLOW_ENDPOINTS = RAYCAST_ALLOW_P0 | RAYCAST_ALLOW_P1;
-    public static float raycast_x_line(int allow_endpoints, float p0x, float p0y, float p1x, float p1y)
+    public static boolean raycast_x_line(int allow_endpoints, float p1x, float p1y, float p2x, float p2y)
     {
-        boolean allowed = false;
-        if(allow_endpoints == 0)
-            allowed = p0y*p1y < 0;
-        else if(allow_endpoints == RAYCAST_ALLOW_ENDPOINTS)
-            allowed = p0y*p1y <= 0;
-        else if(allow_endpoints == RAYCAST_ALLOW_P0)
-            allowed = p0y == 0 || p0y*p1y < 0;
-        else if(allow_endpoints == RAYCAST_ALLOW_P1)
-            allowed = p1y == 0 || p0y*p1y < 0;
-
-        if(allowed)
+        if(Math.max(p1x, p2x) >= 0)
         {
-            float max_x = Math.max(p0x, p1x);
-            float dx = p0x - p1x;
-            float dy = p0y - p1y;
+            boolean allowed = false;
+            if(allow_endpoints == 0)
+                allowed = p2y*p1y < 0;
+            else if(allow_endpoints == RAYCAST_ALLOW_ENDPOINTS)
+                allowed = p2y*p1y <= 0;
+            else if(allow_endpoints == RAYCAST_ALLOW_P0)
+                allowed = p2y == 0 || p2y*p1y < 0;
+            else if(allow_endpoints == RAYCAST_ALLOW_P1)
+                allowed = p1y == 0 || p2y*p1y < 0;
 
-            //x must be to the left of p0,p1
-            if(max_x >= 0)
+            if(allowed)
             {
-                if(dy == 0)
-                    return max_x;
-
-                //instead of 0 would normally be origin_y but since we
-                // shifted everything by origin its 0
-                float intersect_x = dx/dy*(0 - p0y) + p0x;
-                if(intersect_x >= 0)
-                    return intersect_x;
+                float cross = cross_product_z(p1x, p1y, p2x, p2y);
+                float sign = p2y - p1y;
+                return cross*sign >= 0;
             }
         }
-        return Float.NEGATIVE_INFINITY;
-    }
-
-    public static float raycast_x_line(int allow_endpoints, float origin_x, float origin_y, float p0x, float p0y, float p1x, float p1y)
-    {
-        return raycast_x_line(allow_endpoints, p0x - origin_x, p1y - origin_y, p1x - origin_x, p1y - origin_y) + origin_x;
-    }
-
-    public static final class Raycast_Result {
-        public int vertex_0;
-        public int vertex_1;
-
-        public int index_0;
-        public int index_1;
-
-        public float x;
-        public float y;
-
-        public boolean hit;
-    }
-
-    //raycast in x direction starting from origin
-    public static boolean raycast_x_polygon_first_optimistic_hit(Raycast_Result result, float[] x, float[] y, int[] polygon, float origin_x, float origin_y)
-    {
-        for(int i = 0; i < polygon.length; i++)
-        {
-            int j = i+1 < polygon.length ? i+1 : 0;
-            int p0i = polygon[i];
-            int p1i = polygon[j];
-
-            float x_hit = raycast_x_line(RAYCAST_ALLOW_P0, x[p0i], y[p0i], x[p1i], y[p1i]);
-            if(x_hit != Float.NEGATIVE_INFINITY)
-            {
-                result.vertex_0 = p0i;
-                result.vertex_1 = p1i;
-                result.index_0 = i;
-                result.index_1 = j;
-                result.x = origin_x;
-                result.y = origin_y;
-                result.hit = true;
-                return true;
-            }
-        }
-
-        result.vertex_0 = 0;
-        result.vertex_1 = 0;
-        result.index_0 = 0;
-        result.index_1 = 0;
-        result.x = 0;
-        result.y = 0;
-        result.hit = false;
         return false;
     }
 
-    public static float triangle_counter_clockwise_signed_double_area(float[] x, float[] y, int a, int b, int c)
+    public static boolean raycast_x_line(int allow_endpoints, float origin_x, float origin_y, float p0x, float p0y, float p1x, float p1y)
+    {
+        return raycast_x_line(allow_endpoints, p0x - origin_x, p1y - origin_y, p1x - origin_x, p1y - origin_y);
+    }
+
+    //raycast in x direction starting from origin
+    public static int raycast_x_polygon_first_optimistic_hit(float[] x, float[] y, int from_i, int to_i, float origin_x, float origin_y)
+    {
+        float p1x = x[to_i - 1] - origin_x;
+        float p1y = y[to_i - 1] - origin_y;
+        for(int i = from_i; i < to_i; i++)
+        {
+            float p2x = x[i] - origin_x;
+            float p2y = y[i] - origin_y;
+
+            if(raycast_x_line(RAYCAST_ALLOW_P0, p1x, p1y, p2x, p2y))
+                return i;
+        }
+        return -1;
+    }
+
+    public static float cross_product_z(float[] x, float[] y, int a, int b, int c)
     {
         //cross product implicitly treating the z component as zero,
         // thus will have only the z component nonzero
@@ -538,15 +505,15 @@ public final class Triangulate {
 
     public static float triangle_area(float[] x, float[] y, int a, int b, int c) 
     {
-        return Math.abs(triangle_counter_clockwise_signed_double_area(x, y, a, b, c)/2);
+        return Math.abs(cross_product_z(x, y, a, b, c)/2);
     }
     public static boolean counter_clockwise_is_convex(float[] x, float[] y, int a, int b, int c) 
     {
-        return triangle_counter_clockwise_signed_double_area(x, y, a, b, c) >= 0;
+        return cross_product_z(x, y, a, b, c) >= 0;
     }
     public static boolean clockwise_is_convex(float[] x, float[] y, int a, int b, int c)
     {
-        return triangle_counter_clockwise_signed_double_area(x, y, a, b, c) <= 0;
+        return cross_product_z(x, y, a, b, c) <= 0;
     }
 
     public static boolean is_in_triangle_interior2(float[] x, float[] y, int a, int b, int c, int p)
@@ -612,9 +579,6 @@ public final class Triangulate {
             {
                 float[] xs = {x1, x2, x3, px};
                 float[] ys = {y1, y2, y3, py};
-                int[] indices0 = {0, 1, 2};
-                int[] indices1 = {2, 0, 1};
-                int[] indices2 = {1, 2, 0};
 
                 float[] degenrate_xs = {x1, x1, x2, x2, x3, x3};
                 float[] degenrate_ys = {y1, y1, y2, y2, y3, y3};
@@ -623,8 +587,8 @@ public final class Triangulate {
                 {
                     boolean is_interior = is_in_triangle_interior(xs, ys, 0, 1, 2, 3);
                     boolean is_boundary = is_in_triangle_with_boundary(xs, ys, 0, 1, 2, 3);
-                    boolean is_inside_polygon_hit_interior = is_inside_polygon_hit(POINT_IN_SHAPE_INTERIOR, xs, ys, indices0, px, py);
-                    boolean is_inside_polygon_hit_boundary = is_inside_polygon_hit(POINT_IN_SHAPE_WITH_BOUNDARY, xs, ys, indices0, px, py);
+                    boolean is_inside_polygon_hit_interior = is_inside_polygon_hit(POINT_IN_SHAPE_INTERIOR, xs, ys, 0, 3, px, py);
+                    boolean is_inside_polygon_hit_boundary = is_inside_polygon_hit(POINT_IN_SHAPE_WITH_BOUNDARY, xs, ys, 0, 3, px, py);
                     boolean is_inside_polygon_winding_interior = is_inside_polygon_winding(POINT_IN_SHAPE_INTERIOR, xs, ys, 0, 3, px, py);
                     boolean is_inside_polygon_winding_boundary = is_inside_polygon_winding(POINT_IN_SHAPE_WITH_BOUNDARY, xs, ys, 0, 3, px, py);
 
@@ -644,8 +608,8 @@ public final class Triangulate {
                 {
                     boolean is_interior = is_in_triangle_interior(xs, ys, 1, 2, 0, 3);
                     boolean is_boundary = is_in_triangle_with_boundary(xs, ys, 1, 2, 0, 3);
-                    boolean is_inside_polygon_hit_interior = is_inside_polygon_hit(POINT_IN_SHAPE_INTERIOR, xs, ys, indices1, px, py);
-                    boolean is_inside_polygon_hit_boundary = is_inside_polygon_hit(POINT_IN_SHAPE_WITH_BOUNDARY, xs, ys, indices1, px, py);
+                    boolean is_inside_polygon_hit_interior = is_inside_polygon_hit(POINT_IN_SHAPE_INTERIOR, xs, ys, 0, 3, px, py);
+                    boolean is_inside_polygon_hit_boundary = is_inside_polygon_hit(POINT_IN_SHAPE_WITH_BOUNDARY, xs, ys, 0, 3, px, py);
 
                     assert interior == is_interior;
                     assert boundary == is_boundary;
@@ -656,8 +620,8 @@ public final class Triangulate {
                 {
                     boolean is_interior = is_in_triangle_interior(xs, ys, 2, 0, 1, 3);
                     boolean is_boundary = is_in_triangle_with_boundary(xs, ys, 2, 0, 1, 3);
-                    boolean is_inside_polygon_hit_interior = is_inside_polygon_hit(POINT_IN_SHAPE_INTERIOR, xs, ys, indices2, px, py);
-                    boolean is_inside_polygon_hit_boundary = is_inside_polygon_hit(POINT_IN_SHAPE_WITH_BOUNDARY, xs, ys, indices2, px, py);
+                    boolean is_inside_polygon_hit_interior = is_inside_polygon_hit(POINT_IN_SHAPE_INTERIOR, xs, ys, 0, 3, px, py);
+                    boolean is_inside_polygon_hit_boundary = is_inside_polygon_hit(POINT_IN_SHAPE_WITH_BOUNDARY, xs, ys, 0, 3, px, py);
 
                     assert interior == is_interior;
                     assert boundary == is_boundary;

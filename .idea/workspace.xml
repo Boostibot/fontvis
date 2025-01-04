@@ -7,7 +7,6 @@
     <list default="true" id="b0cb0470-dd75-4914-b05d-f64de2c9fd97" name="Changes" comment="fixes, bunch of splines">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/Main.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/Main.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/Splines.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/Splines.java" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/Triangulate.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/Triangulate.java" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -109,11 +108,6 @@
           <properties class="java.lang.ArrayIndexOutOfBoundsException" package="java.lang" />
           <option name="timeStamp" value="39" />
         </breakpoint>
-        <line-breakpoint enabled="true" type="java-line">
-          <url>file://$PROJECT_DIR$/src/Main.java</url>
-          <line>103</line>
-          <option name="timeStamp" value="53" />
-        </line-breakpoint>
       </breakpoints>
     </breakpoint-manager>
   </component>

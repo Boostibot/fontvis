@@ -40,95 +40,188 @@ public class Main {
         public Triangulate.AABB_Vertices aabb;
     }
 
-    public static final class Normalized_Beziere
+    public static final class Point_Buffer
     {
-        public float[] xs;
-        public float[] ys;
-        public int length;
-    }
+        public float[] xs = new float[0];
+        public float[] ys = new float[0];
+        public int length = 0;
 
-    public static Normalized_Beziere normalize_bezier(float[] xs, float[] ys, int from_i, int to_i)
-    {
-        class H {
-            static void push_segment(Normalized_Beziere out, float x1, float y1, float x2, float y2)
-            {
-                if(out.length + 2 > out.xs.length) {
-                    out.xs = Arrays.copyOf(out.xs, out.xs.length*5/4 + 8);
-                    out.ys = Arrays.copyOf(out.ys, out.ys.length*5/4 + 8);
-                }
+        void resize(int length)
+        {
+            reserve(length);
+            this.length = length;
+        }
 
-                //control point
-                out.xs[out.length] = x1;
-                out.ys[out.length] = y1;
-                //on curve point
-                out.xs[out.length + 1] = x2;
-                out.ys[out.length + 1] = y2;
-                out.length += 2;
+        void reserve(int length)
+        {
+            if(length > this.xs.length) {
+                this.xs = Arrays.copyOf(this.xs, this.xs.length*5/4 + 8);
+                this.ys = Arrays.copyOf(this.ys, this.ys.length*5/4 + 8);
             }
         }
 
+        void push(float x1, float y1)
+        {
+            reserve(this.length + 1);
+            this.xs[this.length] = x1;
+            this.ys[this.length] = y1;
+            this.length += 1;
+        }
+
+        void push(float x1, float y1, float x2, float y2)
+        {
+            reserve(this.length + 2);
+
+            //control point
+            this.xs[this.length] = x1;
+            this.ys[this.length] = y1;
+            //on curve point
+            this.xs[this.length + 1] = x2;
+            this.ys[this.length + 1] = y2;
+            this.length += 2;
+        }
+    }
+
+    public static void bezier_normalize_append_x(Point_Buffer into, float[] xs, float[] ys, int from_i, int to_i)
+    {
         assert xs.length % 2 == 0;
         assert ys.length % 2 == 0;
         assert ys.length == xs.length;
 
         Splines.Quad_Bezier b1 = new Splines.Quad_Bezier();
         Splines.Quad_Bezier b2 = new Splines.Quad_Bezier();
-        Normalized_Beziere out = new Normalized_Beziere();
-        //normalize in the x direction
+        into.reserve(to_i - from_i + 8);
+
+        int j = to_i - 1;
+        for(int i = from_i; i < to_i; i += 2)
         {
-            out.xs = new float[to_i - from_i + 8];
-            out.ys = new float[to_i - from_i + 8];
-            out.length = 0;
+            float x1 = xs[j];
+            float y1 = ys[j];
+            float x2 = xs[i];
+            float y2 = ys[i];
+            float x3 = xs[i+1];
+            float y3 = ys[i+1];
 
-            int j = to_i - 1;
-            for(int i = from_i; i < to_i; i += 2)
+            //if control point is extreme - either bigger than both or
+            // smaller than both. If both are smaller than the product below
+            // is positive. If both are bigger than again its positive.
+            boolean is_not_extreme1 = (x1 - x2)*(x3 - x2) <= 0;
+            boolean is_not_extreme2 = Math.min(x1, x3) <= x2 && x2 <= Math.max(x1, x3);
+            assert is_not_extreme1 == is_not_extreme2;
+
+            if((x1 - x2)*(x3 - x2) > 0)
             {
-                float x1 = xs[j];
-                float y1 = ys[j];
-                float x2 = xs[i];
-                float y2 = ys[i];
-                float x3 = xs[i+1];
-                float y3 = ys[i+1];
+                float t = Splines.bezier_extreme(x1, x2, x3);
+                assert 0 < t && t < 1;
+                Splines.bezier_split_at_extreme(false, b1, b2, x1, y1, x2, y2, x3, y3, t);
+                into.push(b1.x2, b1.y2, b1.x3, b1.y3);
+                into.push(b2.x2, b2.y2, b2.x3, b2.y3);
 
-                //if control point is extreme - either bigger then both or
-                // smaller then both. If both are smaller then the product below
-                // is positive. If both are bigger then again its positive.
-                boolean is_not_extreme1 = (x1 - x2)*(x3 - x2) <= 0;
-                boolean is_not_extreme2 = Math.min(x1, x3) <= x2 && x2 <= Math.max(x1, x3);
-                assert is_not_extreme1 == is_not_extreme2;
-
-                if((x1 - x2)*(x3 - x2) > 0)
-                {
-                    float t = Splines.bezier_extreme(x1, x2, x3);
-                    assert 0 < t && t < 1;
-                    Splines.bezier_split_at_extreme(false, b1, b2, x1, y1, x2, y2, x3, y3, t);
-                    H.push_segment(out, b1.x2, b1.y2, b1.x3, b1.y3);
-                    H.push_segment(out, b2.x2, b2.y2, b2.x3, b2.y3);
-
-                    assert (b1.x1 - b1.x2)*(b1.x3 - b1.x2) <= 0;
-                    assert (b2.x1 - b2.x2)*(b2.x3 - b2.x2) <= 0;
-                }
-                else
-                    H.push_segment(out, x2, y2, x3, y3);
-
-                j = i;
+                assert (b1.x1 - b1.x2)*(b1.x3 - b1.x2) <= 0;
+                assert (b2.x1 - b2.x2)*(b2.x3 - b2.x2) <= 0;
             }
+            else
+                into.push(x2, y2, x3, y3);
+
+            j = i;
+        }
+    }
+
+    public static void bezier_normalize_append_y(Point_Buffer into, float[] xs, float[] ys, int from_i, int to_i)
+    {
+        assert xs.length % 2 == 0;
+        assert ys.length % 2 == 0;
+        assert ys.length == xs.length;
+
+        Splines.Quad_Bezier b1 = new Splines.Quad_Bezier();
+        Splines.Quad_Bezier b2 = new Splines.Quad_Bezier();
+        into.reserve(to_i - from_i + 8);
+
+        int j = to_i - 2;
+        for(int i = from_i; i < to_i; i += 2)
+        {
+            float x1 = xs[j+1];
+            float y1 = ys[j+1];
+            float x2 = xs[i];
+            float y2 = ys[i];
+            float x3 = xs[i+1];
+            float y3 = ys[i+1];
+
+            if((y1 - y2)*(y3 - y2) > 0)
+            {
+                float t = Splines.bezier_extreme(y1, y2, y3);
+                assert 0 < t && t < 1;
+                Splines.bezier_split_at_extreme(true, b1, b2, x1, y1, x2, y2, x3, y3, t);
+                into.push(b1.x2, b1.y2, b1.x3, b1.y3);
+                into.push(b2.x2, b2.y2, b2.x3, b2.y3);
+
+                assert (b1.y1 - b1.y2)*(b1.y3 - b1.y2) <= 0;
+                assert (b2.y1 - b2.y2)*(b2.y3 - b2.y2) <= 0;
+            }
+            else
+                into.push(x2, y2, x3, y3);
+
+            j = i;
+        }
+    }
+
+    public static final int BEZIER_IS_NORMALIZED_X = 1;
+    public static final int BEZIER_IS_NORMALIZED_Y = 2;
+    public static final int BEZIER_IS_NORMALIZED_ASSERT = 4;
+    public static boolean bezier_is_normalized(float[] xs, float[] ys, int from_i, int to_i, int options)
+    {
+        boolean out = true;
+        int j = to_i - 2;
+        for(int i = from_i; i < to_i; i += 2)
+        {
+            float x1 = xs[j+1];
+            float y1 = ys[j+1];
+            float x2 = xs[i];
+            float y2 = ys[i];
+            float x3 = xs[i+1];
+            float y3 = ys[i+1];
+
+            if((options & BEZIER_IS_NORMALIZED_X) > 0 && (x1 - x2)*(x3 - x2) > 0)
+            {
+                assert (options & BEZIER_IS_NORMALIZED_ASSERT) == 0;
+                out = false;
+                break;
+            }
+
+            if((options & BEZIER_IS_NORMALIZED_Y) > 0 && (y1 - y2)*(y3 - y2) > 0)
+            {
+                assert (options & BEZIER_IS_NORMALIZED_ASSERT) == 0;
+                out = false;
+                break;
+            }
+
+            j = i;
         }
 
-        //make the last result the new input parameters
-        xs = out.xs;
-        ys = out.ys;
-        from_i = 0;
-        to_i = out.length;
+        return out;
+    }
 
-        //normalize in the y direction
+    public static void bezier_normalize_x(Point_Buffer into, float[] xs, float[] ys, int from_i, int to_i)
+    {
+        into.resize(0);
+        bezier_normalize_append_x(into, xs, ys, from_i, to_i);
+    }
+
+    public static void bezier_normalize_y(Point_Buffer into, float[] xs, float[] ys, int from_i, int to_i)
+    {
+        into.resize(0);
+        bezier_normalize_append_y(into, xs, ys, from_i, to_i);
+    }
+
+    //I dont think this is worth it tbh. Just suck it and go home...
+    //
+    public static int raycast_bezier_first_optimistic_hit(int explucde_i, float[] xs, float[] ys, int from_i, int to_i, float origin_x, float origin_y, float dir_x, float dir_y)
+    {
+        Splines.Intersections intersections = new Splines.Intersections();
+        int j = to_i - 2;
+        for(int i = from_i; i < to_i; i += 2)
         {
-            out.xs = new float[to_i - from_i + 8];
-            out.ys = new float[to_i - from_i + 8];
-            out.length = 0;
-
-            int j = to_i - 2;
-            for(int i = from_i; i < to_i; i += 2)
+            if(i != explucde_i)
             {
                 float x1 = xs[j+1];
                 float y1 = ys[j+1];
@@ -137,46 +230,69 @@ public class Main {
                 float x3 = xs[i+1];
                 float y3 = ys[i+1];
 
-                if((y1 - y2)*(y3 - y2) > 0)
-                {
-                    float t = Splines.bezier_extreme(y1, y2, y3);
-                    assert 0 < t && t < 1;
-                    Splines.bezier_split_at_extreme(true, b1, b2, x1, y1, x2, y2, x3, y3, t);
-                    H.push_segment(out, b1.x2, b1.y2, b1.x3, b1.y3);
-                    H.push_segment(out, b2.x2, b2.y2, b2.x3, b2.y3);
-
-                    assert (b1.y1 - b1.y2)*(b1.y3 - b1.y2) <= 0;
-                    assert (b2.y1 - b2.y2)*(b2.y3 - b2.y2) <= 0;
-                    assert (b1.x1 - b1.x2)*(b1.x3 - b1.x2) <= 0;
-                    assert (b2.x1 - b2.x2)*(b2.x3 - b2.x2) <= 0;
-                }
-                else
-                    H.push_segment(out, x2, y2, x3, y3);
-
-                j = i;
+                if(Splines.bezier_line_intersect(intersections, x1, y1, x2, y2, x3, y3, dir_x, dir_y, origin_x, origin_y) > 0)
+                    return i;
             }
+
+            j = i;
         }
 
-        //assert is normalized
+        return -1;
+    }
+
+
+    public static Point_Buffer bezier_make_polygon_embeddable(float[] xs, float[] ys, int from_i, int to_i)
+    {
+        Point_Buffer out = new Point_Buffer();
+        out.reserve(to_i - from_i + 8);
+
+        int max_bisections = 4;
+        int j = to_i - 2;
+        for(int i = from_i; i < to_i; i += 2)
         {
-            int j = out.length - 2;
-            for(int i = 0; i < out.length; i += 2)
+            float x1 = xs[j+1];
+            float y1 = ys[j+1];
+            float x2 = xs[i];
+            float y2 = ys[i];
+            float x3 = xs[i+1];
+            float y3 = ys[i+1];
+
+            //if isnt straight segment
+            if(x2 != x3 || y2 != y2)
             {
-                float x1 = out.xs[j+1];
-                float y1 = out.ys[j+1];
-                float x2 = out.xs[i];
-                float y2 = out.ys[i];
-                float x3 = out.xs[i+1];
-                float y3 = out.ys[i+1];
+                //bisect up to max_bisections times
+                int bi = 0;
+                for(; bi <= max_bisections; bi++)
+                {
+                    boolean did_hit = false;
+                    int test_count = 1 << (bi + 1);
+                    for(int test_i = 1; test_i < test_count; test_i ++)
+                    {
+                        //test if bise
+                        float bi_t = (float)test_i/test_count;
+                        float origin_x = Splines.bezier(x1, x2, x3, bi_t);
+                        float origin_y = Splines.bezier(x1, x2, x3, bi_t);
 
-                boolean is_not_extreme1_x = (x1 - x2)*(x3 - x2) <= 0;
-                assert is_not_extreme1_x;
+                        float dir_x = x2 - origin_x;
+                        float dir_y = y2 - origin_y;
 
-                boolean is_not_extreme1_y = (y1 - y2)*(y3 - y2) <= 0;
-                assert is_not_extreme1_y;
+                        int hit = raycast_bezier_first_optimistic_hit(i, xs, ys, from_i, to_i, origin_x, origin_y, dir_x, dir_y);
+                        if(hit != -1)
+                        {
+                            System.console().writer().println(STR."Found an overlap at index \{i} bisection \{bi}");
+                            did_hit = true;
+                            break;
+                        }
+                    }
 
-                j = i;
+                    if(did_hit == false)
+                        break;
+                }
+
+                //
             }
+
+            j = i;
         }
 
         return out;
@@ -200,7 +316,8 @@ public class Main {
                 ys[i] = (float) countour.ys[i]/units_per_em;
             }
 
-            Normalized_Beziere normalized = normalize_bezier(xs, ys, 0, xs.length);
+            Point_Buffer normalized = new Point_Buffer();
+            bezier_normalize_y(normalized, xs, ys, 0, xs.length);
             for(int yi = 0; yi < resy; yi++)
                 for(int xi = 0; xi < resx; xi++)
                 {
