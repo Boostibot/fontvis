@@ -274,7 +274,7 @@ public class Main {
         }
 
         {
-            Font_Parser.Glyph glyph = font.glyphs.get("%".codePointAt(0));
+            Font_Parser.Glyph glyph = font.glyphs.get("š".codePointAt(0));
 
             int solids_count = glyph.solids.length;
             int holes_count = glyph.holes.length;
@@ -354,17 +354,18 @@ public class Main {
                 }
             }
 
+            //aggregate all holes into array
+            Triangulate.IndexBuffer[] holes = new Triangulate.IndexBuffer[holes_count];
+            {
+                int hole_i = 0;
+                for(int k = 0; k < shapes.length; k++)
+                    if(are_solid[k] == false)
+                        holes[hole_i++] = polygon_shapes[k];
+            }
+
             //connect solids with holes
             Triangulate.IndexBuffer[] connected_solids = new Triangulate.IndexBuffer[solids_count];
             {
-                //aggregate all holes into array
-                Triangulate.IndexBuffer[] holes = new Triangulate.IndexBuffer[holes_count];
-                {
-                    int hole_i = 0;
-                    for(int k = 0; k < shapes.length; k++)
-                        if(are_solid[k] == false)
-                            holes[hole_i++] = polygon_shapes[k];
-                }
 
                 //connect each solid with each hole - holes that are outside the shape will
                 // not be counted in
@@ -380,13 +381,15 @@ public class Main {
             }
 
             //triangulate
+            int[] colors = {0xFF0000, 0x00FF00, 0x0000FF, 0xFF0000, 0x00FF00, 0x0000FF, 0xFF0000, 0x00FF00, 0x0000FF};
+
             Triangulate.IndexBuffer triangles[] = new Triangulate.IndexBuffer[solids_count];
             for(int k = 0; k < solids_count; k++)
                 triangles[k] = Triangulate.triangulate(null, points.xs, points.ys, connected_solids[k]);
 
             //Draw triangulated polygonal regions
             int solids_color = 0x00;
-            for(int k = 0; k < solids_count; k++)
+            for(int k = 0; k < triangles.length; k++)
             {
                 int flags = 0;
                 glyph_buffer.submit_index_buffer(points.xs, points.ys, triangles[k], solids_color, flags, null);
@@ -404,9 +407,11 @@ public class Main {
             }
 
             //draw connections polygons
+            if(false)
             for(int k = 0; k < solids_count; k++)
             {
-                int point_color = 0x330000FF;
+                //int point_color = 0x330000FF;
+                int point_color = colors[k];
                 float r = 0.005f;
                 Triangulate.IndexBuffer connected = connected_solids[k];
 

@@ -318,47 +318,12 @@ public final class Triangulate {
         if(into == null)
             into = new IndexBuffer();
 
-        class Sort_Hole {
-            public int max_x_vertex = 0;
-            public int max_x_index = 0;
-            public float max_x_vertex_x = 0;
-            public float max_x_vertex_y = 0;
-            IndexBuffer hole;
-        };
-
-        Sort_Hole[] sorted_holes = new Sort_Hole[holes.length];
-        int sorted_holes_count = 0;
-        for(IndexBuffer hole : holes)
-        {
-            if(hole.length > 0)
-            {
-                Sort_Hole sorted = new Sort_Hole();
-                sorted.max_x_index = -1;
-                sorted.max_x_vertex_x = Float.NEGATIVE_INFINITY;
-                for(int k = 0; k < hole.length; k ++)
-                {
-                    if(sorted.max_x_vertex_x <= xs[hole.at(k)]) {
-                        sorted.max_x_vertex_x = xs[hole.at(k)];
-                        sorted.max_x_index = k;
-                    }
-                }
-
-                sorted.max_x_vertex = hole.at(sorted.max_x_index);
-                sorted.max_x_vertex_y = ys[sorted.max_x_vertex];
-                sorted.hole = hole;
-                sorted_holes[sorted_holes_count++] = sorted;
-            }
-        }
-
-        //and sort them so the hole with the vertex with biggest max_x_vertex_x is first
-        Arrays.sort(sorted_holes, 0, sorted_holes_count, (hole_a, hole_b) -> -Float.compare(hole_a.max_x_vertex_x, hole_b.max_x_vertex_x));
-
         //calculate the needed allocation size for the holes
         int total_cap = indices.length;
-        for(int i = 0; i < sorted_holes_count; i++)
-            total_cap += sorted_holes[i].hole.length;
+        for(IndexBuffer hole : holes)
+            total_cap += hole.length;
 
-        total_cap += sorted_holes.length*2; //the bridges
+        total_cap += holes.length*2; //the bridges
 
         //add all of the input vertices
         into.resize(0);
@@ -366,41 +331,80 @@ public final class Triangulate {
         for(int i = 0; i < indices.length; i += 1)
             into.push(indices.at(i));
 
-        //perform the merging
-        for(int i = 0; i < sorted_holes_count; i++)
+        int hole_num = 0;
+        for(IndexBuffer hole : holes)
         {
-            Sort_Hole sorted = sorted_holes[i];
-            IndexBuffer hole = sorted_holes[i].hole;
-            //Note: there are some problematic cases with this and we can run into issues.
-            int hit_i = raycast_x_polygon_first_optimistic_hit(xs, ys, into, sorted.max_x_vertex_x, sorted.max_x_vertex_y);
-            if(hit_i != -1)
-            {
-                //hole: hole[max_x_vertex:]hole[:max_x_vertex]
-                //into: into[:hit_i]into[hit_i:]
-                //============= merge ==========
-                //merged: into[:hit_i + 1]hole[max_x_vertex:]hole[:max_x_vertex]hole[max_x_vertex]into[hit_i:]
-                int hit_vertex = into.at(hit_i);
-                int move_count = into.length - (hit_i + 1);
-                int hole_size = hole.length + 2;
-                into.resize(into.length + hole_size);
-
-                //add space for new indices
-                System.arraycopy(into.indices, hit_i + 1, into.indices, hit_i + 1 + hole_size, move_count);
-
-                //push new indices
-                int pushing_to = hit_i + 1;
-                for(int k = sorted.max_x_index; k < hole.length; k += 1)
-                    into.indices[pushing_to++] = hole.at(k);
-
-                for(int k = 0; k < sorted.max_x_index; k += 1)
-                    into.indices[pushing_to++] = hole.at(k);
-
-                //push from bridge
-                into.indices[pushing_to++] = sorted.max_x_vertex;
-                into.indices[pushing_to++] = hit_vertex;
-            }
+            hole_num += 1;
+            if(hole.length == 0)
+                System.out.println(STR."TRIANGULATE warn: hole #\{hole_num} is zero sized. Ignoring.");
             else
-                System.out.println(STR."TRIANGULATE warn: hole #\{i+1} not inside shape. Ignoring.");
+            {
+                //test whether this hole is inside the shape
+                float first_x = xs[hole.at(0)];
+                float first_y = ys[hole.at(0)];
+                boolean is_inside = is_inside_polygon_hit(POINT_IN_SHAPE_INTERIOR, xs, ys, into, first_x, first_y);
+                if(is_inside == false)
+                    System.out.println(STR."TRIANGULATE warn: hole #\{hole_num} not inside shape. Ignoring.");
+                else
+                {
+                    //find closest vertices
+                    int closest_hole_i = -1;
+                    int closest_into_i = -1;
+
+                    float min_sqr_dist = Float.POSITIVE_INFINITY;
+                    for(int into_i = 0; into_i < into.length; into_i += 1)
+                    {
+                        float into_x = xs[into.at(into_i)];
+                        float into_y = ys[into.at(into_i)];
+                        for(int hole_i = 0; hole_i < hole.length; hole_i += 1)
+                        {
+                            float hole_x = xs[hole.at(hole_i)];
+                            float hole_y = ys[hole.at(hole_i)];
+
+                            float dist_x = hole_x - into_x;
+                            float dist_y = hole_y - into_y;
+                            float sqr_dist = dist_x*dist_x + dist_y*dist_y;
+                            if(min_sqr_dist >= sqr_dist) {
+                                min_sqr_dist = sqr_dist;
+                                closest_hole_i = hole_i;
+                                closest_into_i = into_i;
+                            }
+                        }
+                    }
+
+                    //for brevity
+                    int into_i = closest_into_i;
+                    int into_v = into.at(closest_into_i);
+                    int hole_i = closest_hole_i;
+                    int hole_v = hole.at(closest_hole_i);
+
+                    //Perform the following merging op
+                    //hole: hole[hole_i:]hole[:hole_i]
+                    //into: into[:into_i]into[into_i:]
+                    //============= merge ==========
+                    //merged: into[:into_i + 1]hole[hole_i:]hole[:hole_i + 1]into[into_i:]
+
+                    int move_count = into.length - (into_i + 1);
+                    int hole_size = hole.length + 2;
+                    into.resize(into.length + hole_size);
+
+                    //add space for new indices
+                    System.arraycopy(into.indices, into_i + 1, into.indices, into_i + 1 + hole_size, move_count);
+                    Arrays.fill(into.indices, into_i+1, into_i+1 + hole_size, -1);
+
+                    //push new indices
+                    int pushing_to = into_i + 1;
+                    for(int k = hole_i; k < hole.length; k += 1)
+                        into.indices[pushing_to++] = hole.at(k);
+
+                    for(int k = 0; k < hole_i; k += 1)
+                        into.indices[pushing_to++] = hole.at(k);
+
+                    //push from bridge
+                    into.indices[pushing_to++] = hole_v;
+                    into.indices[pushing_to++] = into_v;
+                }
+            }
         }
 
         return into;
@@ -480,19 +484,19 @@ public final class Triangulate {
     public static int POINT_IN_SHAPE_WITH_BOUNDARY = 0;
     public static int POINT_IN_SHAPE_INTERIOR = 1;
     public static int POINT_IN_SHAPE_BOUNDARY_DONT_CARE = 2;
-    public static boolean is_inside_polygon_winding(int allow_boundary, float[] x, float[] y, int from_i, int to_i, float origin_x, float origin_y)
+    public static boolean is_inside_polygon_winding(int allow_boundary, float[] x, float[] y, IndexBuffer indices, float origin_x, float origin_y)
     {
         //https://web.archive.org/web/20130126163405/http://geomalgorithms.com/a03-_inclusion.html
-        if(from_i >= to_i)
+        if(indices.length == 0)
             return false;
 
         int winding_number = 0;
-        float p1x = x[to_i - 1] - origin_x;
-        float p1y = y[to_i - 1] - origin_y;
-        for (int i = from_i; i < to_i; i++)
+        float p1x = x[indices.at(indices.length - 1)] - origin_x;
+        float p1y = y[indices.at(indices.length - 1)] - origin_y;
+        for(int i = 0; i < indices.length; i ++)
         {
-            float p2x = x[i] - origin_x;
-            float p2y = y[i] - origin_y;
+            float p2x = x[indices.at(i)] - origin_x;
+            float p2y = y[indices.at(i)] - origin_y;
 
             //early out
             if(p1y*p2y <= 0)
@@ -522,16 +526,18 @@ public final class Triangulate {
         return winding_number != 0;
     }
 
-    public static boolean is_inside_polygon_hit(int allow_boundary, float[] x, float[] y, int from_i, int to_i, float origin_x, float origin_y)
+    public static boolean is_inside_polygon_hit(int allow_boundary, float[] x, float[] y, IndexBuffer indices, float origin_x, float origin_y)
     {
-        int num_hits = 0;
-        float p1x = x[to_i - 1] - origin_x;
-        float p1y = y[to_i - 1] - origin_y;
-        for(int i = from_i; i < to_i; i++)
-        {
-            float p2x = x[i] - origin_x;
-            float p2y = y[i] - origin_y;
+        if(indices.length == 0)
+            return false;
 
+        int num_hits = 0;
+        float p1x = x[indices.at(indices.length - 1)] - origin_x;
+        float p1y = y[indices.at(indices.length - 1)] - origin_y;
+        for(int i = 0; i < indices.length; i ++)
+        {
+            float p2x = x[indices.at(i)] - origin_x;
+            float p2y = y[indices.at(i)] - origin_y;
             if(Math.max(p1x, p2x) >= 0)
             {
                 if(p1y*p2y <= 0)
@@ -808,6 +814,7 @@ public final class Triangulate {
             {
                 float[] xs = {x1, x2, x3, px};
                 float[] ys = {y1, y2, y3, py};
+                IndexBuffer range = IndexBuffer.til(3);
 
                 float[] degenrate_xs = {x1, x1, x2, x2, x3, x3};
                 float[] degenrate_ys = {y1, y1, y2, y2, y3, y3};
@@ -816,10 +823,10 @@ public final class Triangulate {
                 {
                     boolean is_interior = is_in_triangle_interior(xs, ys, 0, 1, 2, 3);
                     boolean is_boundary = is_in_triangle_with_boundary(xs, ys, 0, 1, 2, 3);
-                    boolean is_inside_polygon_hit_interior = is_inside_polygon_hit(POINT_IN_SHAPE_INTERIOR, xs, ys, 0, 3, px, py);
-                    boolean is_inside_polygon_hit_boundary = is_inside_polygon_hit(POINT_IN_SHAPE_WITH_BOUNDARY, xs, ys, 0, 3, px, py);
-                    boolean is_inside_polygon_winding_interior = is_inside_polygon_winding(POINT_IN_SHAPE_INTERIOR, xs, ys, 0, 3, px, py);
-                    boolean is_inside_polygon_winding_boundary = is_inside_polygon_winding(POINT_IN_SHAPE_WITH_BOUNDARY, xs, ys, 0, 3, px, py);
+                    boolean is_inside_polygon_hit_interior = is_inside_polygon_hit(POINT_IN_SHAPE_INTERIOR, xs, ys, range, px, py);
+                    boolean is_inside_polygon_hit_boundary = is_inside_polygon_hit(POINT_IN_SHAPE_WITH_BOUNDARY, xs, ys, range, px, py);
+                    boolean is_inside_polygon_winding_interior = is_inside_polygon_winding(POINT_IN_SHAPE_INTERIOR, xs, ys, range, px, py);
+                    boolean is_inside_polygon_winding_boundary = is_inside_polygon_winding(POINT_IN_SHAPE_WITH_BOUNDARY, xs, ys, range, px, py);
 
                     boolean is_inside_normalized_bezier_interior = is_inside_normalized_bezier(POINT_IN_SHAPE_INTERIOR, degenrate_xs, degenrate_ys, 0, 6, px, py);
                     boolean is_inside_normalized_bezier_boundary = is_inside_normalized_bezier(POINT_IN_SHAPE_WITH_BOUNDARY, degenrate_xs, degenrate_ys, 0, 6, px, py);
@@ -837,8 +844,8 @@ public final class Triangulate {
                 {
                     boolean is_interior = is_in_triangle_interior(xs, ys, 1, 2, 0, 3);
                     boolean is_boundary = is_in_triangle_with_boundary(xs, ys, 1, 2, 0, 3);
-                    boolean is_inside_polygon_hit_interior = is_inside_polygon_hit(POINT_IN_SHAPE_INTERIOR, xs, ys, 0, 3, px, py);
-                    boolean is_inside_polygon_hit_boundary = is_inside_polygon_hit(POINT_IN_SHAPE_WITH_BOUNDARY, xs, ys, 0, 3, px, py);
+                    boolean is_inside_polygon_hit_interior = is_inside_polygon_hit(POINT_IN_SHAPE_INTERIOR, xs, ys, range, px, py);
+                    boolean is_inside_polygon_hit_boundary = is_inside_polygon_hit(POINT_IN_SHAPE_WITH_BOUNDARY, xs, ys, range, px, py);
 
                     assert interior == is_interior;
                     assert boundary == is_boundary;
@@ -849,8 +856,8 @@ public final class Triangulate {
                 {
                     boolean is_interior = is_in_triangle_interior(xs, ys, 2, 0, 1, 3);
                     boolean is_boundary = is_in_triangle_with_boundary(xs, ys, 2, 0, 1, 3);
-                    boolean is_inside_polygon_hit_interior = is_inside_polygon_hit(POINT_IN_SHAPE_INTERIOR, xs, ys, 0, 3, px, py);
-                    boolean is_inside_polygon_hit_boundary = is_inside_polygon_hit(POINT_IN_SHAPE_WITH_BOUNDARY, xs, ys, 0, 3, px, py);
+                    boolean is_inside_polygon_hit_interior = is_inside_polygon_hit(POINT_IN_SHAPE_INTERIOR, xs, ys, range, px, py);
+                    boolean is_inside_polygon_hit_boundary = is_inside_polygon_hit(POINT_IN_SHAPE_WITH_BOUNDARY, xs, ys, range, px, py);
 
                     assert interior == is_interior;
                     assert boundary == is_boundary;
