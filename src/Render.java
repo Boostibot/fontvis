@@ -32,7 +32,7 @@ import static org.lwjgl.system.MemoryStack.stackPush;
 public class Render {
     public static final Matrix4f MAT4_ID = new Matrix4f().identity();
 
-    public static final class Quadratic_Bezier_Buffer {
+    public static final class Bezier_Buffer {
         //2 floats position
         //2 floats uv
         //1 uint for color
@@ -53,7 +53,7 @@ public class Render {
         public static int FLAG_INVERSE = 4; //the triangle shape is filled inside out. When combined with rendering triangles, makes the triangle entirely invisible!
         public static int FLAG_OKLAB = 8; //vertex colors are interpolated in the OKLAB colorspace instead of linear colorspace.
 
-        public Quadratic_Bezier_Buffer(int max_cpu_size)
+        public Bezier_Buffer(int max_cpu_size)
         {
             this.capacity = max_cpu_size/BYTES_PER_SEGMENT;
             this.buffer = ByteBuffer.allocate(this.capacity*BYTES_PER_SEGMENT);
@@ -156,7 +156,7 @@ public class Render {
                     x + -sqrt3*r, y + -r, -sqrt3, -1, color1,
                     x + sqrt3*r, y + -r, sqrt3, -1, color2,
                     x, y + 2*r, 0, 2, color3,
-                    Quadratic_Bezier_Buffer.FLAG_CIRCLE | flags, transform_or_null
+                    Bezier_Buffer.FLAG_CIRCLE | flags, transform_or_null
             );
         }
 
@@ -842,6 +842,18 @@ public class Render {
             }
         }
 
+        public void submit_index_buffer(float[] xs, float[] ys, Triangulate.IndexBuffer indices, int color, int flags, Matrix3f transform_or_null)
+        {
+            for(int i = 0; i < indices.length; i += 3)
+            {
+                this.submit_bezier_or_triangle(
+                        xs[indices.at(i)], ys[indices.at(i)],
+                        xs[indices.at(i+1)], ys[indices.at(i+1)],
+                        xs[indices.at(i+2)], ys[indices.at(i+2)],
+                        color, flags, null);
+            }
+        }
+
         static Matrix3f SUBMIT_TEXT_COUBNTOUR_TEMP_MATRIX = new Matrix3f();
         public void submit_text_countour(Font_Parser.Font font, String text, float scale, float width, float spacing_flat, float spacing_boost, int color, Matrix3f transform_or_null)
         {
@@ -879,9 +891,9 @@ public class Render {
         public float aa_threshold = 0.7f;
         public ByteBuffer temp_buffer;
 
-        public static int VERTICES_PER_SEGMENT = Quadratic_Bezier_Buffer.VERTICES_PER_SEGMENT;
-        public static int BYTES_PER_SEGMENT = Quadratic_Bezier_Buffer.BYTES_PER_SEGMENT;
-        public static int BYTES_PER_VERTEX = Quadratic_Bezier_Buffer.BYTES_PER_VERTEX;
+        public static int VERTICES_PER_SEGMENT = Bezier_Buffer.VERTICES_PER_SEGMENT;
+        public static int BYTES_PER_SEGMENT = Bezier_Buffer.BYTES_PER_SEGMENT;
+        public static int BYTES_PER_VERTEX = Bezier_Buffer.BYTES_PER_VERTEX;
 
         public Quadratic_Bezier_Render(int max_gpu_size)
         {
@@ -1065,7 +1077,7 @@ public class Render {
                     """);
         }
 
-        public void render(Matrix4f model_or_null, Matrix4f view_or_null, Quadratic_Bezier_Buffer... batches)
+        public void render(Matrix4f model_or_null, Matrix4f view_or_null, Bezier_Buffer... batches)
         {
             if(batches == null || batches.length == 0)
                 return;
@@ -1093,7 +1105,7 @@ public class Render {
                 int filled = 0;
                 for(int batch_i = 0; batch_i < batches.length; batch_i ++)
                 {
-                    Quadratic_Bezier_Buffer batch = batches[batch_i];
+                    Bezier_Buffer batch = batches[batch_i];
                     int len = min(capacity - filled, batch.length - skip_len);
                     if (len != 0)
                     {

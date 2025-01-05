@@ -79,25 +79,123 @@ public final class Triangulate {
         }
     }
 
-    public static void bezier_normalize_append_x(PointArray into, float[] xs, float[] ys, int from_i, int to_i)
-    {
-        assert xs.length % 2 == 0;
-        assert ys.length % 2 == 0;
-        assert ys.length == xs.length;
+    //IndexBuffer acts as a simple array iterator (from, to, stride).
+    //Optionally one can also attach actual array of indices for more indirection
+    // and arbitrary iteration order. In case of attached index array
+    // the (from, to, stride) applies to it.
+    public static final class IndexBuffer {
+        public int[] indices;
+        public int from;
+        public int length;
+        public int stride = 1;
 
+        public int at(int i)
+        {
+            int o = from + stride*i;
+            if(indices == null)
+                return o;
+            else
+                return indices[o];
+        }
+
+        void resize(int length)
+        {
+            reserve(length);
+            this.length = length;
+        }
+
+        void reserve(int length)
+        {
+            if(indices == null || length > indices.length) {
+                if(indices == null)
+                {
+                    indices = new int[length];
+                    for(int i = 0; i < length; i++)
+                        indices[i] = from + i*stride;
+
+                    from = 0;
+                    stride = 1;
+                }
+                else
+                {
+                    int new_cap = Math.max(length, this.indices.length*3/2 + 8);
+                    this.indices = Arrays.copyOf(this.indices, this.from + new_cap*this.stride);
+                }
+            }
+        }
+
+        void push(int i)
+        {
+            reserve(length + 1);
+            indices[from + length*stride] = i;
+            length += 1;
+        }
+
+        void push(int i1, int i2)
+        {
+            reserve(length + 2);
+            indices[from + (length + 0)*stride] = i1;
+            indices[from + (length + 1)*stride] = i2;
+            length += 2;
+        }
+
+        void push(int i1, int i2, int i3)
+        {
+            reserve(length + 3);
+            indices[from + (length + 0)*stride] = i1;
+            indices[from + (length + 1)*stride] = i2;
+            indices[from + (length + 2)*stride] = i3;
+            length += 3;
+        }
+
+        public static IndexBuffer til(int to)
+        {
+            return IndexBuffer.range(0, to, 1);
+        }
+
+        public static IndexBuffer range(int from, int to)
+        {
+            return IndexBuffer.range(from, to, 1);
+        }
+
+        public static IndexBuffer range(int from, int to, int stride)
+        {
+            IndexBuffer out = new IndexBuffer();
+            out.from = from;
+            out.stride = stride;
+            out.length = (to - from)/stride;
+            return out;
+        }
+
+        public static IndexBuffer from_indices(int[] indices, int from, int to)
+        {
+            IndexBuffer out = new IndexBuffer();
+            out.indices = indices;
+            out.from = from;
+            out.length = to - from;
+            out.stride = 1;
+            return out;
+        }
+    }
+
+    public static void bezier_normalize_append_x(PointArray into, float[] xs, float[] ys, IndexBuffer indices)
+    {
+        if(indices.length == 0)
+            return;
+
+        assert indices.length % 2 == 0;
         Splines.Quad_Bezier b1 = new Splines.Quad_Bezier();
         Splines.Quad_Bezier b2 = new Splines.Quad_Bezier();
-        into.reserve(to_i - from_i + 8);
+        into.reserve(indices.length + 8);
 
-        int j = to_i - 1;
-        for(int i = from_i; i < to_i; i += 2)
+        float x1 = xs[indices.at(indices.length - 1)];
+        float y1 = ys[indices.at(indices.length - 1)];
+        for(int i = 0; i < indices.length; i += 1)
         {
-            float x1 = xs[j];
-            float y1 = ys[j];
-            float x2 = xs[i];
-            float y2 = ys[i];
-            float x3 = xs[i+1];
-            float y3 = ys[i+1];
+            float x2 = xs[indices.at(i)];
+            float y2 = ys[indices.at(i)];
+            float x3 = xs[indices.at(i+1)];
+            float y3 = ys[indices.at(i+1)];
 
             //if control point is extreme - either bigger than both or
             // smaller than both. If both are smaller than the product below
@@ -120,29 +218,29 @@ public final class Triangulate {
             else
                 into.push(x2, y2, x3, y3);
 
-            j = i;
+            x1 = x3;
+            y1 = y3;
         }
     }
 
-    public static void bezier_normalize_append_y(PointArray into, float[] xs, float[] ys, int from_i, int to_i)
+    public static void bezier_normalize_append_y(PointArray into, float[] xs, float[] ys, IndexBuffer indices)
     {
-        assert xs.length % 2 == 0;
-        assert ys.length % 2 == 0;
-        assert ys.length == xs.length;
+        if(indices.length == 0)
+            return;
 
+        assert indices.length % 2 == 0;
         Splines.Quad_Bezier b1 = new Splines.Quad_Bezier();
         Splines.Quad_Bezier b2 = new Splines.Quad_Bezier();
-        into.reserve(to_i - from_i + 8);
+        into.reserve(indices.length + 8);
 
-        int j = to_i - 2;
-        for(int i = from_i; i < to_i; i += 2)
+        float x1 = xs[indices.at(indices.length - 1)];
+        float y1 = ys[indices.at(indices.length - 1)];
+        for(int i = 0; i < indices.length; i += 1)
         {
-            float x1 = xs[j+1];
-            float y1 = ys[j+1];
-            float x2 = xs[i];
-            float y2 = ys[i];
-            float x3 = xs[i+1];
-            float y3 = ys[i+1];
+            float x2 = xs[indices.at(i)];
+            float y2 = ys[indices.at(i)];
+            float x3 = xs[indices.at(i+1)];
+            float y3 = ys[indices.at(i+1)];
 
             if((y1 - y2)*(y3 - y2) > 0)
             {
@@ -158,25 +256,25 @@ public final class Triangulate {
             else
                 into.push(x2, y2, x3, y3);
 
-            j = i;
+            x1 = x3;
+            y1 = y3;
         }
     }
 
     public static final int BEZIER_IS_NORMALIZED_X = 1;
     public static final int BEZIER_IS_NORMALIZED_Y = 2;
     public static final int BEZIER_IS_NORMALIZED_ASSERT = 4;
-    public static boolean bezier_is_normalized(float[] xs, float[] ys, int from_i, int to_i, int options)
+    public static boolean bezier_is_normalized(float[] xs, float[] ys, IndexBuffer indices, int options)
     {
         boolean out = true;
-        int j = to_i - 2;
-        for(int i = from_i; i < to_i; i += 2)
+        float x1 = xs[indices.at(indices.length - 1)];
+        float y1 = ys[indices.at(indices.length - 1)];
+        for(int i = 0; i < indices.length; i += 1)
         {
-            float x1 = xs[j+1];
-            float y1 = ys[j+1];
-            float x2 = xs[i];
-            float y2 = ys[i];
-            float x3 = xs[i+1];
-            float y3 = ys[i+1];
+            float x2 = xs[indices.at(i)];
+            float y2 = ys[indices.at(i)];
+            float x3 = xs[indices.at(i+1)];
+            float y3 = ys[indices.at(i+1)];
 
             if((options & BEZIER_IS_NORMALIZED_X) > 0 && (x1 - x2)*(x3 - x2) > 0)
             {
@@ -191,23 +289,23 @@ public final class Triangulate {
                 out = false;
                 break;
             }
-
-            j = i;
+            x1 = x3;
+            y1 = y3;
         }
 
         return out;
     }
 
-    public static void bezier_normalize_x(PointArray into, float[] xs, float[] ys, int from_i, int to_i)
+    public static void bezier_normalize_x(PointArray into, float[] xs, float[] ys, IndexBuffer indices)
     {
         into.resize(0);
-        bezier_normalize_append_x(into, xs, ys, from_i, to_i);
+        bezier_normalize_append_x(into, xs, ys, indices);
     }
 
-    public static void bezier_normalize_y(PointArray into, float[] xs, float[] ys, int from_i, int to_i)
+    public static void bezier_normalize_y(PointArray into, float[] xs, float[] ys, IndexBuffer indices)
     {
         into.resize(0);
-        bezier_normalize_append_y(into, xs, ys, from_i, to_i);
+        bezier_normalize_append_y(into, xs, ys, indices);
     }
 
     public static void match_holes()
@@ -215,45 +313,38 @@ public final class Triangulate {
 
     }
 
-    public static class Hole {
-        public float[] xs;
-        public float[] ys;
-        public int from_i;
-        public int to_i;
-        public int stride;
-    }
-
-    public static void connect_holes(PointArray into, float[] xs, float[] ys, int from_i, int to_i, int stride, Hole[] holes)
+    public static IndexBuffer connect_holes(IndexBuffer into, float[] xs, float[] ys, IndexBuffer indices, IndexBuffer[] holes)
     {
+        if(into == null)
+            into = new IndexBuffer();
+
         class Sort_Hole {
             public int max_x_vertex = 0;
+            public int max_x_index = 0;
             public float max_x_vertex_x = 0;
             public float max_x_vertex_y = 0;
-            Hole hole;
+            IndexBuffer hole;
         };
 
         Sort_Hole[] sorted_holes = new Sort_Hole[holes.length];
         int sorted_holes_count = 0;
-        for(Hole hole : holes)
+        for(IndexBuffer hole : holes)
         {
-            if(hole.to_i - hole.from_i >= hole.stride)
+            if(hole.length > 0)
             {
-                int max_x_vertex = -1;
-                float max_x = Float.NEGATIVE_INFINITY;
-                float max_y = Float.NEGATIVE_INFINITY;
-                for(int k = hole.from_i; k < hole.to_i; k += hole.stride)
+                Sort_Hole sorted = new Sort_Hole();
+                sorted.max_x_index = -1;
+                sorted.max_x_vertex_x = Float.NEGATIVE_INFINITY;
+                for(int k = 0; k < hole.length; k ++)
                 {
-                    if(max_x <= hole.xs[k]) {
-                        max_x = hole.xs[k];
-                        max_x_vertex = k;
+                    if(sorted.max_x_vertex_x <= xs[hole.at(k)]) {
+                        sorted.max_x_vertex_x = xs[hole.at(k)];
+                        sorted.max_x_index = k;
                     }
                 }
 
-                max_y = hole.ys[max_x_vertex];
-                Sort_Hole sorted = new Sort_Hole();
-                sorted.max_x_vertex = max_x_vertex;
-                sorted.max_x_vertex_x = max_x;
-                sorted.max_x_vertex_y = max_y;
+                sorted.max_x_vertex = hole.at(sorted.max_x_index);
+                sorted.max_x_vertex_y = ys[sorted.max_x_vertex];
                 sorted.hole = hole;
                 sorted_holes[sorted_holes_count++] = sorted;
             }
@@ -263,87 +354,69 @@ public final class Triangulate {
         Arrays.sort(sorted_holes, 0, sorted_holes_count, (hole_a, hole_b) -> -Float.compare(hole_a.max_x_vertex_x, hole_b.max_x_vertex_x));
 
         //calculate the needed allocation size for the holes
-        int total_cap = (to_i - from_i)/stride;
+        int total_cap = indices.length;
         for(int i = 0; i < sorted_holes_count; i++)
-        {
-            Hole hole = sorted_holes[i].hole;
-            total_cap += (hole.to_i - hole.from_i)/hole.stride;
-        }
+            total_cap += sorted_holes[i].hole.length;
 
-        total_cap += sorted_holes.length; //the bridges
+        total_cap += sorted_holes.length*2; //the bridges
 
         //add all of the input vertices
+        into.resize(0);
         into.reserve(into.length + total_cap);
-        int into_from = into.length;
-        for(int i = from_i; i < to_i; i += stride)
-            into.push(xs[i], ys[i]);
+        for(int i = 0; i < indices.length; i += 1)
+            into.push(indices.at(i));
 
         //perform the merging
         for(int i = 0; i < sorted_holes_count; i++)
         {
             Sort_Hole sorted = sorted_holes[i];
-            Hole hole = sorted_holes[i].hole;
-            int hit_i = raycast_x_polygon_first_optimistic_hit(into.xs, into.ys, into_from, into.length, sorted.max_x_vertex_x, sorted.max_x_vertex_y);
+            IndexBuffer hole = sorted_holes[i].hole;
+            //Note: there are some problematic cases with this and we can run into issues.
+            int hit_i = raycast_x_polygon_first_optimistic_hit(xs, ys, into, sorted.max_x_vertex_x, sorted.max_x_vertex_y);
             if(hit_i != -1)
             {
                 //hole: hole[max_x_vertex:]hole[:max_x_vertex]
                 //into: into[:hit_i]into[hit_i:]
                 //============= merge ==========
                 //merged: into[:hit_i + 1]hole[max_x_vertex:]hole[:max_x_vertex]hole[max_x_vertex]into[hit_i:]
-
-                float hit_x = into.xs[hit_i];
-                float hit_y = into.ys[hit_i];
-
-                int hole_size = (hole.to_i - hole.from_i)/hole.stride + 2;
-                int move_count = into.length - hit_i;
+                int hit_vertex = into.at(hit_i);
+                int move_count = into.length - (hit_i + 1);
+                int hole_size = hole.length + 2;
                 into.resize(into.length + hole_size);
 
-                //add space for new items
-                System.arraycopy(into.xs, hit_i + 1, into.xs, hit_i + 1 + hole_size, move_count);
-                System.arraycopy(into.ys, hit_i + 1, into.ys, hit_i + 1 + hole_size, move_count);
+                //add space for new indices
+                System.arraycopy(into.indices, hit_i + 1, into.indices, hit_i + 1 + hole_size, move_count);
 
-                //push new items
-                int pushing_to = hit_i;
-                into.xs[pushing_to] = hit_x;
-                into.ys[pushing_to] = hit_y;
-                pushing_to += 1;
+                //push new indices
+                int pushing_to = hit_i + 1;
+                for(int k = sorted.max_x_index; k < hole.length; k += 1)
+                    into.indices[pushing_to++] = hole.at(k);
 
-                for(int k = sorted.max_x_vertex; k < hole.to_i; k += hole.stride) {
-                    into.xs[pushing_to] = hole.xs[k];
-                    into.ys[pushing_to] = hole.ys[k];
-                    pushing_to += 1;
-                }
-                for(int k = hole.from_i; k < sorted.max_x_vertex; k += hole.stride) {
-                    into.xs[pushing_to] = hole.xs[k];
-                    into.ys[pushing_to] = hole.ys[k];
-                    pushing_to += 1;
-                }
+                for(int k = 0; k < sorted.max_x_index; k += 1)
+                    into.indices[pushing_to++] = hole.at(k);
 
                 //push from bridge
-                into.xs[pushing_to] = sorted.max_x_vertex_x;
-                into.ys[pushing_to] = sorted.max_x_vertex_y;
-                pushing_to += 1;
-
-                into.xs[pushing_to] = hit_x;
-                into.ys[pushing_to] = hit_y;
-                pushing_to += 1;
+                into.indices[pushing_to++] = sorted.max_x_vertex;
+                into.indices[pushing_to++] = hit_vertex;
             }
             else
                 System.out.println(STR."TRIANGULATE warn: hole #\{i+1} not inside shape. Ignoring.");
         }
 
+        return into;
     }
 
-    public static IntArray triangulate(float[] xs, float[] ys, int from_i, int to_i, int stride)
+    public static IndexBuffer triangulate(IndexBuffer triangle_indices, float[] xs, float[] ys, IndexBuffer indices)
     {
-        assert from_i <= to_i;
-        int count = (to_i - from_i)/stride;
-        IntArray triangle_indices = IntArray.with_capacity(3*count);
+        if(triangle_indices == null)
+            triangle_indices = new IndexBuffer();
+        triangle_indices.resize(0);
+        triangle_indices.reserve(3*indices.length);
 
-        int remaining_len = count;
-        int[] remaining = new int[count];
-        for(int i = 0; i < count; i++)
-            remaining[i] = from_i + i*stride;
+        int remaining_len = indices.length;
+        int[] remaining = new int[indices.length];
+        for(int i = 0; i < indices.length; i++)
+            remaining[i] = indices.at(i);
 
         while(remaining_len >= 3)
         {
@@ -359,9 +432,9 @@ public final class Triangulate {
                 {
                     //check intersections with all points (not prev,curr,next)
                     boolean contains_no_other_points = true;
-                    for(int k = from_i; k < to_i; k += stride)
+                    for(int k = 0; k < indices.length; k += 1)
                     {
-                        if(is_in_triangle_interior(xs, ys, prev, curr, next, k))
+                        if(is_in_triangle_interior(xs, ys, prev, curr, next, indices.at(k)))
                         {
                             contains_no_other_points = false;
                             break;
@@ -374,7 +447,7 @@ public final class Triangulate {
                         triangle_indices.push(curr);
                         triangle_indices.push(next);
 
-                        //remove arr[curr]
+                        //remove arr[curr] by shifting remianing indices
                         for(int j = i; j < remaining_len - 1; j++)
                             remaining[j] = remaining[j + 1];
                         remaining_len -= 1;
@@ -487,7 +560,8 @@ public final class Triangulate {
 
     public static boolean is_inside_normalized_bezier(int allow_boundary, float[] x, float[] y, int from_i, int to_i, float origin_x, float origin_y)
     {
-        if(from_i + 1 >= to_i || (to_i - from_i) % 2 != 0)
+        assert (to_i - from_i) % 2 == 0;
+        if(from_i + 1 >= to_i)
             return false;
 
         //this has no effect on the global correctness of the algorithm
@@ -517,7 +591,7 @@ public final class Triangulate {
                 {
                     if(p1y != p3y)
                     {
-                        //if  is by convention linear segment use the more accurate anc cheaper line intersection
+                        //if is by convention linear segment use the more accurate and cheaper line intersection
                         if(p3x == p2x && p3y == p2y)
                         {
                             float cross = cross_product_z(p1x, p1y, p3x, p3y);
@@ -535,7 +609,7 @@ public final class Triangulate {
                             //Since origin is between p1y and p3y such solution must exist
                             // and further because we have normalized bezier we know that this
                             // solution is unique (normalized bezier means that there are no
-                            // parabolas. for each y exists unique x)
+                            // parabolas - for each y exists unique x)
                             //This lest us skip checking whether the solution t is valid
                             // (ie if it lays inside the [0, 1] interval) and instead clamp it to the
                             // [0, 1] interval. This gets rid of an array of numerical inaccuracy problems.
@@ -630,80 +704,6 @@ public final class Triangulate {
         return raycast_x_line(allow_endpoints, p0x - origin_x, p1y - origin_y, p1x - origin_x, p1y - origin_y);
     }
 
-    public static final class IndexBuffer {
-        public int[] items;
-        public int from;
-        public int length;
-        public int stride = 1;
-
-        public int at(int i)
-        {
-            int o = from + stride*i;
-            if(items == null)
-                return o;
-            else
-                return items[o];
-        }
-
-        void resize(int length)
-        {
-            reserve(length);
-            this.length = length;
-        }
-
-        void reserve(int length)
-        {
-            if(length > this.items.length) {
-                int new_cap = Math.max(this.items.length*3/2 + 8, length);
-                this.items = Arrays.copyOf(this.items, new_cap*this.stride);
-            }
-        }
-
-        void push(int i)
-        {
-            reserve(length + 1);
-            items[from + length*stride] = i;
-            length += 1;
-        }
-
-        void push(int i, int j)
-        {
-            reserve(length + 2);
-            items[from + length*stride] = i;
-            items[from + (length + 1)*stride] = j;
-            length += 2;
-        }
-
-        public static IndexBuffer til(int to)
-        {
-            return IndexBuffer.range(0, to, 1);
-        }
-
-        public static IndexBuffer range(int from, int to)
-        {
-            return IndexBuffer.range(from, to, 1);
-        }
-
-        public static IndexBuffer range(int from, int to, int stride)
-        {
-            IndexBuffer out = new IndexBuffer();
-            out.from = from;
-            out.stride = stride;
-            out.length = (to - from)/stride;
-            return out;
-        }
-
-        public static IndexBuffer from_indices(int[] indices, int from, int to)
-        {
-            IndexBuffer out = new IndexBuffer();
-            out.items = indices;
-            out.from = from;
-            out.length = to - from;
-            out.stride = 1;
-            return out;
-        }
-    }
-
     //raycast in x direction starting from origin
     public static int raycast_x_polygon_first_optimistic_hit(float[] x, float[] y, IndexBuffer indices, float origin_x, float origin_y)
     {
@@ -718,7 +718,7 @@ public final class Triangulate {
             float p2y = y[indices.at(i)] - origin_y;
 
             if(raycast_x_line(RAYCAST_ALLOW_P0, p1x, p1y, p2x, p2y))
-                return i-1 >= 0 ? i-1 : indices.length - 1;
+                return i-1 >= 0 ? i-1 : indices.length-1;
 
             p1x = p2x;
             p1y = p2y;
