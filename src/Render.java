@@ -876,7 +876,7 @@ public class Render {
         public int VAO;
         public int shader;
         public int capacity;
-        public float aa_threshold = 0.5f;
+        public float aa_threshold = 0.7f;
         public ByteBuffer temp_buffer;
 
         public static int VERTICES_PER_SEGMENT = Quadratic_Bezier_Buffer.VERTICES_PER_SEGMENT;

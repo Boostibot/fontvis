@@ -1,181 +1,349 @@
 import java.util.Arrays;
 
 public final class Triangulate {
-    public static final class AABB {
-        public float x0 = 0;
-        public float x1 = 0;
-        public float y0 = 0;
-        public float y1 = 0;
-    }
-
-    public static final class AABB_Vertices {
-        public float x0 = 0;
-        public float x1 = 0;
-        public float y0 = 0;
-        public float y1 = 0;
-
-        public int x0_index = 0;
-        public int x1_index = 0;
-        public int y0_index = 0;
-        public int y1_index = 0;
-
-        public int x0_vertex = 0;
-        public int x1_vertex = 0;
-        public int y0_vertex = 0;
-        public int y1_vertex = 0;
-    }
-
-    public static AABB aabb_from_aabb_vertices(AABB_Vertices aabb)
+    public static final class PointArray
     {
-        AABB out = new AABB();
-        out.x0 = aabb.x0;
-        out.x1 = aabb.x1;
-        out.y0 = aabb.y0;
-        out.y1 = aabb.y1;
+        public float[] xs = new float[0];
+        public float[] ys = new float[0];
+        public int length = 0;
+
+        void resize(int length)
+        {
+            reserve(length);
+            this.length = length;
+        }
+
+        void reserve(int length)
+        {
+            if(length > this.xs.length) {
+                int new_cap = Math.max(this.xs.length*3/2 + 8, length);
+                this.xs = Arrays.copyOf(this.xs, new_cap);
+                this.ys = Arrays.copyOf(this.ys, new_cap);
+            }
+        }
+
+        void push(float x1, float y1)
+        {
+            reserve(this.length + 1);
+            this.xs[this.length] = x1;
+            this.ys[this.length] = y1;
+            this.length += 1;
+        }
+
+        void push(float x1, float y1, float x2, float y2)
+        {
+            reserve(this.length + 2);
+            this.xs[this.length] = x1;
+            this.ys[this.length] = y1;
+            this.xs[this.length + 1] = x2;
+            this.ys[this.length + 1] = y2;
+            this.length += 2;
+        }
+
+        void push(float x1, float y1, float x2, float y2, float x3, float y3)
+        {
+            reserve(this.length + 3);
+            this.xs[this.length] = x1;
+            this.ys[this.length] = y1;
+            this.xs[this.length + 1] = x2;
+            this.ys[this.length + 1] = y2;
+            this.xs[this.length + 2] = x3;
+            this.ys[this.length + 2] = y3;
+            this.length += 3;
+        }
+    }
+
+    public static final class BoolArray
+    {
+        public boolean[] items = new boolean[0];
+        public int length = 0;
+
+        void resize(int length)
+        {
+            reserve(length);
+            this.length = length;
+        }
+
+        void reserve(int length)
+        {
+            if(length > this.items.length) {
+                int new_cap = Math.max(this.items.length*3/2 + 8, length);
+                this.items = Arrays.copyOf(this.items, new_cap);
+            }
+        }
+
+        void push(boolean b)
+        {
+            resize(this.length + 1);
+            this.items[this.length - 1] = b;
+        }
+    }
+
+    public static void bezier_normalize_append_x(PointArray into, float[] xs, float[] ys, int from_i, int to_i)
+    {
+        assert xs.length % 2 == 0;
+        assert ys.length % 2 == 0;
+        assert ys.length == xs.length;
+
+        Splines.Quad_Bezier b1 = new Splines.Quad_Bezier();
+        Splines.Quad_Bezier b2 = new Splines.Quad_Bezier();
+        into.reserve(to_i - from_i + 8);
+
+        int j = to_i - 1;
+        for(int i = from_i; i < to_i; i += 2)
+        {
+            float x1 = xs[j];
+            float y1 = ys[j];
+            float x2 = xs[i];
+            float y2 = ys[i];
+            float x3 = xs[i+1];
+            float y3 = ys[i+1];
+
+            //if control point is extreme - either bigger than both or
+            // smaller than both. If both are smaller than the product below
+            // is positive. If both are bigger than again its positive.
+            boolean is_not_extreme1 = (x1 - x2)*(x3 - x2) <= 0;
+            boolean is_not_extreme2 = Math.min(x1, x3) <= x2 && x2 <= Math.max(x1, x3);
+            assert is_not_extreme1 == is_not_extreme2;
+
+            if((x1 - x2)*(x3 - x2) > 0)
+            {
+                float t = Splines.bezier_extreme(x1, x2, x3);
+                assert 0 < t && t < 1;
+                Splines.bezier_split_at_extreme(false, b1, b2, x1, y1, x2, y2, x3, y3, t);
+                into.push(b1.x2, b1.y2, b1.x3, b1.y3);
+                into.push(b2.x2, b2.y2, b2.x3, b2.y3);
+
+                assert (b1.x1 - b1.x2)*(b1.x3 - b1.x2) <= 0;
+                assert (b2.x1 - b2.x2)*(b2.x3 - b2.x2) <= 0;
+            }
+            else
+                into.push(x2, y2, x3, y3);
+
+            j = i;
+        }
+    }
+
+    public static void bezier_normalize_append_y(PointArray into, float[] xs, float[] ys, int from_i, int to_i)
+    {
+        assert xs.length % 2 == 0;
+        assert ys.length % 2 == 0;
+        assert ys.length == xs.length;
+
+        Splines.Quad_Bezier b1 = new Splines.Quad_Bezier();
+        Splines.Quad_Bezier b2 = new Splines.Quad_Bezier();
+        into.reserve(to_i - from_i + 8);
+
+        int j = to_i - 2;
+        for(int i = from_i; i < to_i; i += 2)
+        {
+            float x1 = xs[j+1];
+            float y1 = ys[j+1];
+            float x2 = xs[i];
+            float y2 = ys[i];
+            float x3 = xs[i+1];
+            float y3 = ys[i+1];
+
+            if((y1 - y2)*(y3 - y2) > 0)
+            {
+                float t = Splines.bezier_extreme(y1, y2, y3);
+                assert 0 < t && t < 1;
+                Splines.bezier_split_at_extreme(true, b1, b2, x1, y1, x2, y2, x3, y3, t);
+                into.push(b1.x2, b1.y2, b1.x3, b1.y3);
+                into.push(b2.x2, b2.y2, b2.x3, b2.y3);
+
+                assert (b1.y1 - b1.y2)*(b1.y3 - b1.y2) <= 0;
+                assert (b2.y1 - b2.y2)*(b2.y3 - b2.y2) <= 0;
+            }
+            else
+                into.push(x2, y2, x3, y3);
+
+            j = i;
+        }
+    }
+
+    public static final int BEZIER_IS_NORMALIZED_X = 1;
+    public static final int BEZIER_IS_NORMALIZED_Y = 2;
+    public static final int BEZIER_IS_NORMALIZED_ASSERT = 4;
+    public static boolean bezier_is_normalized(float[] xs, float[] ys, int from_i, int to_i, int options)
+    {
+        boolean out = true;
+        int j = to_i - 2;
+        for(int i = from_i; i < to_i; i += 2)
+        {
+            float x1 = xs[j+1];
+            float y1 = ys[j+1];
+            float x2 = xs[i];
+            float y2 = ys[i];
+            float x3 = xs[i+1];
+            float y3 = ys[i+1];
+
+            if((options & BEZIER_IS_NORMALIZED_X) > 0 && (x1 - x2)*(x3 - x2) > 0)
+            {
+                assert (options & BEZIER_IS_NORMALIZED_ASSERT) == 0;
+                out = false;
+                break;
+            }
+
+            if((options & BEZIER_IS_NORMALIZED_Y) > 0 && (y1 - y2)*(y3 - y2) > 0)
+            {
+                assert (options & BEZIER_IS_NORMALIZED_ASSERT) == 0;
+                out = false;
+                break;
+            }
+
+            j = i;
+        }
+
         return out;
     }
 
-    public static AABB_Vertices aabb_calculate(float[] xs, float[] ys, int[] indices)
+    public static void bezier_normalize_x(PointArray into, float[] xs, float[] ys, int from_i, int to_i)
     {
-        AABB_Vertices aabb = new AABB_Vertices();
-        if(indices.length > 0)
-        {
-            aabb.x0 = Float.POSITIVE_INFINITY;
-            aabb.x1 = Float.NEGATIVE_INFINITY;
-            aabb.y0 = Float.POSITIVE_INFINITY;
-            aabb.y1 = Float.NEGATIVE_INFINITY;
-            for(int k = 0; k < indices.length; k++)
-            {
-                int index = indices[k];
-                if(aabb.x0 >= xs[index]) {
-                    aabb.x0 = xs[index];
-                    aabb.x0_index = k;
-                }
-
-                if(aabb.x1 <= xs[index]) {
-                    aabb.x1 = xs[index];
-                    aabb.x1_index = k;
-                }
-
-                if(aabb.y0 >= ys[index]) {
-                    aabb.y0 = ys[index];
-                    aabb.y0_index = k;
-                }
-
-                if(aabb.y1 <= ys[index]) {
-                    aabb.y1 = ys[index];
-                    aabb.y1_index = k;
-                }
-            }
-
-            aabb.x0_vertex = indices[aabb.x0_index];
-            aabb.x1_vertex = indices[aabb.x1_index];
-            aabb.y0_vertex = indices[aabb.y0_index];
-            aabb.y1_vertex = indices[aabb.y1_index];
-        }
-        return aabb;
+        into.resize(0);
+        bezier_normalize_append_x(into, xs, ys, from_i, to_i);
     }
 
-    /*
-    public static IntArray connect_holes(float[] xs, float[] ys, int[] indices, int[][] holes)
+    public static void bezier_normalize_y(PointArray into, float[] xs, float[] ys, int from_i, int to_i)
     {
-        if(indices.length == 0)
-            return new IntArray();
+        into.resize(0);
+        bezier_normalize_append_y(into, xs, ys, from_i, to_i);
+    }
 
-        //Get info about each hole (TODO replace with AABB)
+    public static void match_holes()
+    {
+
+    }
+
+    public static class Hole {
+        public float[] xs;
+        public float[] ys;
+        public int from_i;
+        public int to_i;
+        public int stride;
+    }
+
+    public static void connect_holes(PointArray into, float[] xs, float[] ys, int from_i, int to_i, int stride, Hole[] holes)
+    {
         class Sort_Hole {
             public int max_x_vertex = 0;
-            public int max_x_index = 0;
             public float max_x_vertex_x = 0;
             public float max_x_vertex_y = 0;
-            public int[] indices = null;
+            Hole hole;
         };
 
         Sort_Hole[] sorted_holes = new Sort_Hole[holes.length];
-        for(int hole_i = 0; hole_i < holes.length; hole_i++)
+        int sorted_holes_count = 0;
+        for(Hole hole : holes)
         {
-            int[] hole = holes[hole_i];
-
-            int max_x_index = -1;
-            int max_x_vertex = -1;
-            float max_x = Float.NEGATIVE_INFINITY;
-            float max_y = Float.NEGATIVE_INFINITY;
-            for(int k = 0; k < hole.length; k++)
+            if(hole.to_i - hole.from_i >= hole.stride)
             {
-                int index = hole[k];
-                if(max_x <= xs[index]) {
-                    max_x = xs[index];
-                    max_x_index = k;
+                int max_x_vertex = -1;
+                float max_x = Float.NEGATIVE_INFINITY;
+                float max_y = Float.NEGATIVE_INFINITY;
+                for(int k = hole.from_i; k < hole.to_i; k += hole.stride)
+                {
+                    if(max_x <= hole.xs[k]) {
+                        max_x = hole.xs[k];
+                        max_x_vertex = k;
+                    }
                 }
-            }
 
-            if(max_x_index != -1)
-            {
-                max_x_vertex = hole[max_x_index];
-                max_y = ys[max_x_vertex];
+                max_y = hole.ys[max_x_vertex];
+                Sort_Hole sorted = new Sort_Hole();
+                sorted.max_x_vertex = max_x_vertex;
+                sorted.max_x_vertex_x = max_x;
+                sorted.max_x_vertex_y = max_y;
+                sorted.hole = hole;
+                sorted_holes[sorted_holes_count++] = sorted;
             }
-
-            Sort_Hole sorted = new Sort_Hole();
-            sorted.max_x_index = max_x_index;
-            sorted.max_x_vertex = max_x_vertex;
-            sorted.max_x_vertex_x = max_x;
-            sorted.max_x_vertex_y = max_y;
-            sorted.indices = hole;
-            sorted_holes[hole_i] = sorted;
         }
 
         //and sort them so the hole with the vertex with biggest max_x_vertex_x is first
-        Arrays.sort(sorted_holes, (hole_a, hole_b) -> -Float.compare(hole_a.max_x_vertex_x, hole_b.max_x_vertex_x));
+        Arrays.sort(sorted_holes, 0, sorted_holes_count, (hole_a, hole_b) -> -Float.compare(hole_a.max_x_vertex_x, hole_b.max_x_vertex_x));
 
         //calculate the needed allocation size for the holes
-        int total_cap = indices.length;
-        for(int i = 0; i < holes.length; i++)
-            total_cap += holes[i].length;
-
-        total_cap += holes.length; //the bridges
-
-        //perform the merging
-        IntArray out = IntArray.with_capacity(total_cap);
-        out.push(indices);
-
-        Raycast_Result ray_res = new Raycast_Result();
-        for(Sort_Hole hole : sorted_holes)
+        int total_cap = (to_i - from_i)/stride;
+        for(int i = 0; i < sorted_holes_count; i++)
         {
-            int[] holei = hole.indices;
-            if(holei.length > 0)
-            {
-                float origin_x = hole.max_x_vertex_x;
-                float origin_y = hole.max_x_vertex_y;
-                int max_x_index = hole.max_x_index;
-                if(raycast_x_polygon_first_optimistic_hit(ray_res, xs, ys, out.array, origin_x, origin_y))
-                {
-                    int index_0 = ray_res.index_0;
-
-                    //hole: hole[max_x_index:]hole[:max_x_index]
-                    //vert: out[:index_0]out[index_0:]
-                    //============= merge ==========   
-                    //merged: out[:index_0]hole[max_x_index:]hole[:max_x_index]out[index_0]res[index_0:]
-                    out.insert_hole(index_0, holei.length + 1);
-                    System.arraycopy(holei, max_x_index, out.array, index_0, holei.length - max_x_index);
-                    System.arraycopy(holei, 0, out.array, index_0 + holei.length - max_x_index, max_x_index);
-                    out.array[index_0 + holei.length] = ray_res.vertex_0;
-                }
-                else
-                {
-                    assert false;
-                }
-            }
+            Hole hole = sorted_holes[i].hole;
+            total_cap += (hole.to_i - hole.from_i)/hole.stride;
         }
 
+        total_cap += sorted_holes.length; //the bridges
 
-        return out;
+        //add all of the input vertices
+        into.reserve(into.length + total_cap);
+        int into_from = into.length;
+        for(int i = from_i; i < to_i; i += stride)
+            into.push(xs[i], ys[i]);
+
+        //perform the merging
+        for(int i = 0; i < sorted_holes_count; i++)
+        {
+            Sort_Hole sorted = sorted_holes[i];
+            Hole hole = sorted_holes[i].hole;
+            int hit_i = raycast_x_polygon_first_optimistic_hit(into.xs, into.ys, into_from, into.length, sorted.max_x_vertex_x, sorted.max_x_vertex_y);
+            if(hit_i != -1)
+            {
+                //hole: hole[max_x_vertex:]hole[:max_x_vertex]
+                //into: into[:hit_i]into[hit_i:]
+                //============= merge ==========
+                //merged: into[:hit_i + 1]hole[max_x_vertex:]hole[:max_x_vertex]hole[max_x_vertex]into[hit_i:]
+
+                float hit_x = into.xs[hit_i];
+                float hit_y = into.ys[hit_i];
+
+                int hole_size = (hole.to_i - hole.from_i)/hole.stride + 2;
+                int move_count = into.length - hit_i;
+                into.resize(into.length + hole_size);
+
+                //add space for new items
+                System.arraycopy(into.xs, hit_i + 1, into.xs, hit_i + 1 + hole_size, move_count);
+                System.arraycopy(into.ys, hit_i + 1, into.ys, hit_i + 1 + hole_size, move_count);
+
+                //push new items
+                int pushing_to = hit_i;
+                into.xs[pushing_to] = hit_x;
+                into.ys[pushing_to] = hit_y;
+                pushing_to += 1;
+
+                for(int k = sorted.max_x_vertex; k < hole.to_i; k += hole.stride) {
+                    into.xs[pushing_to] = hole.xs[k];
+                    into.ys[pushing_to] = hole.ys[k];
+                    pushing_to += 1;
+                }
+                for(int k = hole.from_i; k < sorted.max_x_vertex; k += hole.stride) {
+                    into.xs[pushing_to] = hole.xs[k];
+                    into.ys[pushing_to] = hole.ys[k];
+                    pushing_to += 1;
+                }
+
+                //push from bridge
+                into.xs[pushing_to] = sorted.max_x_vertex_x;
+                into.ys[pushing_to] = sorted.max_x_vertex_y;
+                pushing_to += 1;
+
+                into.xs[pushing_to] = hit_x;
+                into.ys[pushing_to] = hit_y;
+                pushing_to += 1;
+            }
+            else
+                System.out.println(STR."TRIANGULATE warn: hole #\{i+1} not inside shape. Ignoring.");
+        }
+
     }
-    */
-    public static IntArray triangulate(float[] xs, float[] ys, int[] indices)
+
+    public static IntArray triangulate(float[] xs, float[] ys, int from_i, int to_i, int stride)
     {
-        IntArray triangle_indices = IntArray.with_capacity(3*indices.length);
-        int[] remaining = indices.clone();
-        int remaining_len = remaining.length;
+        assert from_i <= to_i;
+        int count = (to_i - from_i)/stride;
+        IntArray triangle_indices = IntArray.with_capacity(3*count);
+
+        int remaining_len = count;
+        int[] remaining = new int[count];
+        for(int i = 0; i < count; i++)
+            remaining[i] = from_i + i*stride;
 
         while(remaining_len >= 3)
         {
@@ -191,15 +359,12 @@ public final class Triangulate {
                 {
                     //check intersections with all points (not prev,curr,next)
                     boolean contains_no_other_points = true;
-                    for(int k = 0; k < indices.length; k++)
+                    for(int k = from_i; k < to_i; k += stride)
                     {
-                        if(k < prev || k > next)
+                        if(is_in_triangle_interior(xs, ys, prev, curr, next, k))
                         {
-                            if(is_in_triangle_with_boundary(xs, ys, prev, curr, next, k))
-                            {
-                                contains_no_other_points = false;
-                                break;
-                            }
+                            contains_no_other_points = false;
+                            break;
                         }
                     }
 
@@ -210,7 +375,7 @@ public final class Triangulate {
                         triangle_indices.push(next);
 
                         //remove arr[curr]
-                        for(int j = curr; j < remaining_len - 1; j++)
+                        for(int j = i; j < remaining_len - 1; j++)
                             remaining[j] = remaining[j + 1];
                         remaining_len -= 1;
 
@@ -222,14 +387,13 @@ public final class Triangulate {
 
             if(did_remove == false)
             {
-                System.out.println("bad bad");
+                System.out.println("TRIANGULATE warn: triangulate failed to form a valid triangle. Broken geometry?");
                 break;
             }
         }
 
         return triangle_indices;
     }
-
 
     public static float cross_product_z(float ux, float uy, float vx, float vy)
     {
@@ -238,18 +402,6 @@ public final class Triangulate {
     public static float cross_product_z(float px, float py, float p1x, float p1y, float p2x, float p2y)
     {
         return cross_product_z(p1x - px, p1y - py, p2x - px, p2y - py);
-    }
-
-    public static boolean is_point_on_segment(float px, float py, float p1x, float p1y, float p2x, float p2y)
-    {
-        float d1x = p1x - px;
-        float d1y = p1y - py;
-        float d2x = p2x - px;
-        float d2y = p2y - py;
-
-        return cross_product_z(d1x, d1y, d2x, d2x) == 0  //if forms a zero area triangle with point p
-            && d1x*d2x <= 0  //if px is between p1x and p2x (or equal to one)
-            && d1y*d2y <= 0; //similarly for py
     }
 
     public static int POINT_IN_SHAPE_WITH_BOUNDARY = 0;
@@ -478,7 +630,102 @@ public final class Triangulate {
         return raycast_x_line(allow_endpoints, p0x - origin_x, p1y - origin_y, p1x - origin_x, p1y - origin_y);
     }
 
+    public static final class IndexBuffer {
+        public int[] items;
+        public int from;
+        public int length;
+        public int stride = 1;
+
+        public int at(int i)
+        {
+            int o = from + stride*i;
+            if(items == null)
+                return o;
+            else
+                return items[o];
+        }
+
+        void resize(int length)
+        {
+            reserve(length);
+            this.length = length;
+        }
+
+        void reserve(int length)
+        {
+            if(length > this.items.length) {
+                int new_cap = Math.max(this.items.length*3/2 + 8, length);
+                this.items = Arrays.copyOf(this.items, new_cap*this.stride);
+            }
+        }
+
+        void push(int i)
+        {
+            reserve(length + 1);
+            items[from + length*stride] = i;
+            length += 1;
+        }
+
+        void push(int i, int j)
+        {
+            reserve(length + 2);
+            items[from + length*stride] = i;
+            items[from + (length + 1)*stride] = j;
+            length += 2;
+        }
+
+        public static IndexBuffer til(int to)
+        {
+            return IndexBuffer.range(0, to, 1);
+        }
+
+        public static IndexBuffer range(int from, int to)
+        {
+            return IndexBuffer.range(from, to, 1);
+        }
+
+        public static IndexBuffer range(int from, int to, int stride)
+        {
+            IndexBuffer out = new IndexBuffer();
+            out.from = from;
+            out.stride = stride;
+            out.length = (to - from)/stride;
+            return out;
+        }
+
+        public static IndexBuffer from_indices(int[] indices, int from, int to)
+        {
+            IndexBuffer out = new IndexBuffer();
+            out.items = indices;
+            out.from = from;
+            out.length = to - from;
+            out.stride = 1;
+            return out;
+        }
+    }
+
     //raycast in x direction starting from origin
+    public static int raycast_x_polygon_first_optimistic_hit(float[] x, float[] y, IndexBuffer indices, float origin_x, float origin_y)
+    {
+        if(indices.length == 0)
+            return -1;
+
+        float p1x = x[indices.at(indices.length - 1)] - origin_x ;
+        float p1y = y[indices.at(indices.length - 1)] - origin_y;
+        for(int i = 0; i < indices.length; i ++)
+        {
+            float p2x = x[indices.at(i)] - origin_x;
+            float p2y = y[indices.at(i)] - origin_y;
+
+            if(raycast_x_line(RAYCAST_ALLOW_P0, p1x, p1y, p2x, p2y))
+                return i-1 >= 0 ? i-1 : indices.length - 1;
+
+            p1x = p2x;
+            p1y = p2y;
+        }
+        return -1;
+    }
+
     public static int raycast_x_polygon_first_optimistic_hit(float[] x, float[] y, int from_i, int to_i, float origin_x, float origin_y)
     {
         float p1x = x[to_i - 1] - origin_x;
@@ -489,10 +736,14 @@ public final class Triangulate {
             float p2y = y[i] - origin_y;
 
             if(raycast_x_line(RAYCAST_ALLOW_P0, p1x, p1y, p2x, p2y))
-                return i;
+                return i-1 >= 0 ? i-1 : to_i-1;
+
+            p1x = p2x;
+            p1y = p2y;
         }
         return -1;
     }
+
 
     public static float cross_product_z(float[] x, float[] y, int a, int b, int c)
     {
@@ -503,40 +754,20 @@ public final class Triangulate {
         return cross_product_z;
     }
 
-    public static float triangle_area(float[] x, float[] y, int a, int b, int c) 
-    {
-        return Math.abs(cross_product_z(x, y, a, b, c)/2);
-    }
     public static boolean counter_clockwise_is_convex(float[] x, float[] y, int a, int b, int c) 
     {
         return cross_product_z(x, y, a, b, c) >= 0;
-    }
-    public static boolean clockwise_is_convex(float[] x, float[] y, int a, int b, int c)
-    {
-        return cross_product_z(x, y, a, b, c) <= 0;
-    }
-
-    public static boolean is_in_triangle_interior2(float[] x, float[] y, int a, int b, int c, int p)
-    {
-        float twice_area = (y[b] - y[c]) * (x[a] - x[c]) - (x[c] - x[b]) * (y[a] - y[c]);
-        if(twice_area == 0)
-            return false;
-
-        float u = ((y[b] - y[c]) * (x[p] - x[c]) + (x[c] - x[b]) * (y[p] - y[c]))/twice_area;
-        float v = ((y[c] - y[a]) * (x[p] - x[c]) + (x[a] - x[c]) * (y[p] - y[c]))/twice_area;
-        return (0 < u) && (0 < v) && (u + v < 1);
     }
 
     public static boolean is_in_triangle_interior(float[] x, float[] y, int p0, int p1, int p2, int p)
     {
         var A2 = (-y[p1]*x[p2] + y[p0]*(-x[p1] + x[p2]) + x[p0]*(y[p1] - y[p2]) + x[p1]*y[p2]);
-        var sign = A2 < 0 ? -1 : 1;
+        var sign = Math.signum(A2);
         var s = (y[p0]*x[p2] - x[p0]*y[p2] + (y[p2] - y[p0])*x[p] + (x[p0] - x[p2])*y[p])*sign;
-        var t = (x[p0]*y[p1] - y[p0]*x[p1] + (y[p0] - y[p1])*x[p] + (x[p1] - x[p0])*y[p])* sign;
+        var t = (x[p0]*y[p1] - y[p0]*x[p1] + (y[p0] - y[p1])*x[p] + (x[p1] - x[p0])*y[p])*sign;
 
         return s > 0 && t > 0 && (s + t) < A2 * sign;
     }
-
 
     public static boolean is_in_triangle_with_boundary(float[] x, float[] y, int a, int b, int c, int p)
     {
@@ -555,16 +786,14 @@ public final class Triangulate {
 
     public static float counter_clockwise_signed_area(float[] x, float[] y, int[] indices, int indices_from, int indices_to)
     {
-        if(indices.length == 0)
-            return 0;
-
         float signed_area = 0;
+        int j = indices_to - 1;
         for(int i = indices_from; i < indices_to; i++) {
-            int j = i + 1 < indices_to ? i + 1 : indices_from;
-            signed_area += x[i] * y[j] - x[j] * y[i];
+            signed_area += x[i]*y[j] - x[j]*y[i];
+            j = i;
         }
 
-        return signed_area;
+        return signed_area/2;
     }
 
     public static boolean is_polygon_counter_clockwise(float[] x, float[] y, int[] indices, int indices_from, int indices_to)
@@ -653,5 +882,80 @@ public final class Triangulate {
         //degenerate triangles
         for(int i = 0; i <= 8; i++) 
             H.test_is_in_triangle_single(0, 0, 2, 0, 1, 0, /**/ 0.25f*i, 0, false, true);
+    }
+
+    public static final class AABB {
+        public float x0 = 0;
+        public float x1 = 0;
+        public float y0 = 0;
+        public float y1 = 0;
+    }
+
+    public static final class AABB_Vertices {
+        public float x0 = 0;
+        public float x1 = 0;
+        public float y0 = 0;
+        public float y1 = 0;
+
+        public int x0_index = 0;
+        public int x1_index = 0;
+        public int y0_index = 0;
+        public int y1_index = 0;
+
+        public int x0_vertex = 0;
+        public int x1_vertex = 0;
+        public int y0_vertex = 0;
+        public int y1_vertex = 0;
+    }
+
+    public static AABB aabb_from_aabb_vertices(AABB_Vertices aabb)
+    {
+        AABB out = new AABB();
+        out.x0 = aabb.x0;
+        out.x1 = aabb.x1;
+        out.y0 = aabb.y0;
+        out.y1 = aabb.y1;
+        return out;
+    }
+
+    public static AABB_Vertices aabb_calculate(float[] xs, float[] ys, int[] indices)
+    {
+        AABB_Vertices aabb = new AABB_Vertices();
+        if(indices.length > 0)
+        {
+            aabb.x0 = Float.POSITIVE_INFINITY;
+            aabb.x1 = Float.NEGATIVE_INFINITY;
+            aabb.y0 = Float.POSITIVE_INFINITY;
+            aabb.y1 = Float.NEGATIVE_INFINITY;
+            for(int k = 0; k < indices.length; k++)
+            {
+                int index = indices[k];
+                if(aabb.x0 >= xs[index]) {
+                    aabb.x0 = xs[index];
+                    aabb.x0_index = k;
+                }
+
+                if(aabb.x1 <= xs[index]) {
+                    aabb.x1 = xs[index];
+                    aabb.x1_index = k;
+                }
+
+                if(aabb.y0 >= ys[index]) {
+                    aabb.y0 = ys[index];
+                    aabb.y0_index = k;
+                }
+
+                if(aabb.y1 <= ys[index]) {
+                    aabb.y1 = ys[index];
+                    aabb.y1_index = k;
+                }
+            }
+
+            aabb.x0_vertex = indices[aabb.x0_index];
+            aabb.x1_vertex = indices[aabb.x1_index];
+            aabb.y0_vertex = indices[aabb.y0_index];
+            aabb.y1_vertex = indices[aabb.y1_index];
+        }
+        return aabb;
     }
 }

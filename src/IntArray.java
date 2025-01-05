@@ -11,7 +11,7 @@ public class IntArray implements Cloneable {
     {
         //invariants
         assert 0 <= from && from <= array.length;
-        assert 0 <= capacity && capacity < array.length - from;
+        assert 0 <= capacity && capacity <= array.length - from;
         assert 0 <= length && length <= capacity;
 
         if(desired_capacity > capacity) {
