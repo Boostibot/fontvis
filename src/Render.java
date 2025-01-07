@@ -119,7 +119,7 @@ public class Render {
             length += 1;
         }
 
-        public void submit_bezier_or_triangle(
+        public void submit_triangle(
                 float x1, float y1, int color1,
                 float x2, float y2, int color2,
                 float x3, float y3, int color3,
@@ -140,13 +140,13 @@ public class Render {
                     flags | FLAG_CIRCLE & ~FLAG_BEZIER, transform_or_null);
         }
 
-        public void submit_bezier_or_triangle(
+        public void submit_triangle(
                 float x1, float y1,
                 float x2, float y2,
                 float x3, float y3, int color,
                 int flags, Matrix3f transform_or_null)
         {
-            submit_bezier_or_triangle(x1, y1, color, x2, y2, color, x3, y3, color, flags & ~FLAG_OKLAB, transform_or_null);
+            submit_triangle(x1, y1, color, x2, y2, color, x3, y3, color, flags & ~FLAG_OKLAB, transform_or_null);
         }
 
         public void submit_circle(float x, float y, float r, int color1, int color2, int color3, int flags, Matrix3f transform_or_null)
@@ -163,6 +163,28 @@ public class Render {
         public void submit_circle(float x, float y, float r, int color, Matrix3f transform_or_null)
         {
             submit_circle(x,y, r, color, color, color, 0, transform_or_null);
+        }
+
+
+        public void submit_rectangle(float x1, float y1, float x2, float y2, float x3, float y3, float x4, float y4, int c1, int c2, int c3, int c4, int flags, Matrix3f transform_or_null)
+        {
+            submit(
+                x1, y1, 0, 0, c1,
+                x2, y2, 0, 0, c2,
+                x3, y3, 0, 0, c3,
+                flags, transform_or_null
+            );
+            submit(
+                x3, y3, 0, 0, c3,
+                x4, y4, 0, 0, c4,
+                x1, y1, 0, 0, c1,
+                flags, transform_or_null
+            );
+        }
+
+        public void submit_rectangle(float x1, float y1, float x2, float y2, float x3, float y3, float x4, float y4, int color, int flags, Matrix3f transform_or_null)
+        {
+            submit_rectangle(x1, y1, x2, y2, x3, y3, x4, y4, color, color, color, color, flags, transform_or_null);
         }
 
         public void submit_rectangle(float x, float y, float width, float height, int c_ul, int c_ur, int c_ll, int c_lr, int flags, Matrix3f transform_or_null)
@@ -374,7 +396,7 @@ public class Render {
             return (float) Math.sqrt(a*a + b*b);
         }
 
-        static final class Line_Connection
+        public static final class Line_Connection
         {
             float u_side_x1;
             float u_side_y1;
@@ -432,7 +454,7 @@ public class Render {
             //
             // A is shared across all connection styles while B differs/is represented by two points instead.
             // If the angle between v and u is very small thus the corner is very sharp we use "cut corner".
-            // The angle of a=90 (sharp_corner_heightt = cos(a=90)) is here just for illustration as
+            // The angle of a=90 (sharp_corner_height = cos(a=90)) is here just for illustration as
             // normally we cut at far narrower angles. We need to add additional triangle A,B,B' as shown on the picture.
             //
             //                           2r
@@ -482,10 +504,10 @@ public class Render {
             // (and also of v since they are very similar in this case)
             if(abs(v_dot_pu) < perpend_epsilon)
             {
-                connection.u_side_x1 = -pux*r;
-                connection.u_side_y1 = -puy*r;
-                connection.u_side_x2 = pux*r;
-                connection.u_side_y2 = puy*r;
+                connection.u_side_x1 = pux*r;
+                connection.u_side_y1 = puy*r;
+                connection.u_side_x2 = -pux*r;
+                connection.u_side_y2 = -puy*r;
 
                 connection.v_side_x1 = connection.u_side_x1;
                 connection.v_side_y1 = connection.u_side_y1;
@@ -501,19 +523,56 @@ public class Render {
                 float h_mag = hypot(ux + vx, uy + vy);
                 float hx = (ux + vx)/h_mag;
                 float hy = (uy + vy)/h_mag;
-
                 float phx = -hy;
                 float phy = hx;
+                //First consider the following setup
+                //                   H
+                //                _- |\
+                //             _-    | \
+                //          _K       |  \
+                //       _-   \      |   \
+                //    _-       \     |    \
+                //  0-----------G----I-----J
+                //  where between both GIH and 0HJ is 90 degrees.
+                //
+                // We know that I = (G.H/G.G)G which is a projection of H onto G
+                // we can calculate K = (H.G/H.H)H (by swapping G and H)
+                // which is projection of G onto H.
+                // We can notice that 0GK and 0HJ triangles are similar
+                // and thus the same relationship between G and K will hold for J and H:
+                // projecting J onto H will equal H. We get H = (H.J/H.H)H and from the
+                // fact that J is colinear with G we can write J = aG for some scalar a.
+                // Thus we get H = (aG.H/H.H)H ie 1 = aG.H/H.H. So a = H.H/G.H
+                // and vector J = (H.H/G.H)G. One last thing is to realize this does not
+                // depend at all on the magnitude of G so even when we know only its
+                // direction we can calculate J.
+                //
+                // Now we are trying to calculate the inner joint intersection ie find A. (see first diagram).
+                // We have vector u,h and pu (perpendicular to u). We get the following diagram
+                //                  r*pu
+                //                _-  \
+                //             _-      \
+                //          _-          \
+                //       _-              \
+                //    _-                  \
+                //  0---------->h----------A
+                // where A is the unknown vector. Comparing with the earlier triangle we can rewrite it in terms
+                // of the variables there so H = r*pu, G = h, A = J and immediately obtain A as
+                //    A = (H.H/G.H)G = (r*pu . r*pu/h.r*pu)h = (r^2(pu.pu)/r*(h.pu))h
+                //      = r/(h*pu)h [because pu is normalized thus pu.pu=1] = beta*h
                 float h_dot_pu = hx*pux + hy*puy;
 
                 //The position of sharp connection point on the inside of the bend
                 // is shared among all connection styles
+//                float beta = Math.abs(r/h_dot_pu);
                 float beta = r/h_dot_pu;
                 if(Float.isInfinite(beta))
                     beta = 0;
 
-                float Ax = hx*beta;
-                float Ay = hy*beta;
+//                if(v_dot_pu < 0)
+//                    beta = -beta;
+                float Ax = beta*hx;
+                float Ay = beta*hy;
 
                 //Rounded corner
                 if(do_rounded)
@@ -539,37 +598,17 @@ public class Render {
 
                     //Since is perpendicular depends on direction is required to make two cases.
                     // Dont ask too much. This is more of a hack since I am too tired to think this really through.
-                    if(v_dot_pu < 0)
+                    if(v_dot_pu <= 0)
                     {
-                        connection.u_side_x2 = pux*r;
-                        connection.u_side_y2 = puy*r;
-                        connection.u_side_x1 = -Ax;
-                        connection.u_side_y1 = -Ay;
+                        connection.u_side_x1 = pux*r;
+                        connection.u_side_y1 = puy*r;
+                        connection.u_side_x2 = -Ax;
+                        connection.u_side_y2 = -Ay;
 
-                        connection.v_side_x2 = -pvx*r;
-                        connection.v_side_y2 = -pvy*r;
-                        connection.v_side_x1 = -Ax;
-                        connection.v_side_y1 = -Ay;
-
-                        connection.has_primitive = true;
-                        connection.primitive_x1 = connection.u_side_x2;
-                        connection.primitive_y1 = connection.u_side_y2;
-                        connection.primitive_x2 = connection.v_side_x2;
-                        connection.primitive_y2 = connection.v_side_y2;
-                        connection.primitive_x3 = -Ax;
-                        connection.primitive_y3 = -Ay;
-                    }
-                    else
-                    {
-                        connection.u_side_x1 = -pux*r;
-                        connection.u_side_y1 = -puy*r;
-                        connection.u_side_x2 = Ax;
-                        connection.u_side_y2 = Ay;
-
-                        connection.v_side_x1 = pvx*r;
-                        connection.v_side_y1 = pvy*r;
-                        connection.v_side_x2 = Ax;
-                        connection.v_side_y2 = Ay;
+                        connection.v_side_x1 = -pvx*r;
+                        connection.v_side_y1 = -pvy*r;
+                        connection.v_side_x2 = -Ax;
+                        connection.v_side_y2 = -Ay;
 
                         connection.has_primitive = true;
                         connection.primitive_x1 = connection.u_side_x1;
@@ -578,6 +617,26 @@ public class Render {
                         connection.primitive_y2 = connection.v_side_y1;
                         connection.primitive_x3 = connection.v_side_x2;
                         connection.primitive_y3 = connection.v_side_y2;
+                    }
+                    else
+                    {
+                        connection.u_side_x2 = -pux*r;
+                        connection.u_side_y2 = -puy*r;
+                        connection.u_side_x1 = Ax;
+                        connection.u_side_y1 = Ay;
+
+                        connection.v_side_x2 = pvx*r;
+                        connection.v_side_y2 = pvy*r;
+                        connection.v_side_x1 = Ax;
+                        connection.v_side_y1 = Ay;
+
+                        connection.has_primitive = true;
+                        connection.primitive_x1 = connection.u_side_x2;
+                        connection.primitive_y1 = connection.u_side_y2;
+                        connection.primitive_x2 = connection.v_side_x2;
+                        connection.primitive_y2 = connection.v_side_y2;
+                        connection.primitive_x3 = connection.v_side_x1;
+                        connection.primitive_y3 = connection.v_side_y1;
                     }
 
                     assert !Float.isNaN(connection.u_side_x2);
@@ -589,35 +648,34 @@ public class Render {
                 else if(u_dot_v > sharp_connection_threshold)
                 {
                     //Find such vector B on the outer boundary along the u vector
-                    // (that is B = A + gamma*u) so that its sharp_corner_height=s
+                    // (that is B = -A + gamma*u) so that its sharp_corner_height=s
                     // distance along h from the origin. That is |proj_{-h} B| = s
-                    // s = B.-h / |h|. factor out gamma and calculate.
+                    // s = B.-h / |h|. factor out gamma to get the following code.
                     // The same for B' using v instead of u.
+                    //Note that A.B
+                    float u_dot_h = ux*hx + uy*hy;
+                    float v_dot_h = vx*hx + vy*hy;
+                    float u_gamma = (beta - sharp_corner_height)/u_dot_h;
+                    float v_gamma = (beta - sharp_corner_height)/v_dot_h;
 
-                    //u.h = u.(u+v) = u.u + u.v = 1 + u.v
-                    float u_dot_h = 1 + u_dot_v;
-                    float v_dot_h = 1 + u_dot_v;
-                    float u_gamma = (-beta - sharp_corner_height)/u_dot_h;
-                    float v_gamma = (-beta - sharp_corner_height)/v_dot_h;
+                    connection.u_side_x1 = Ax;
+                    connection.u_side_y1 = Ay;
+                    connection.u_side_x2 = -Ax + ux*u_gamma;
+                    connection.u_side_y2 = -Ay + uy*u_gamma;
 
-                    connection.u_side_x1 = Ax + ux*u_gamma;
-                    connection.u_side_y1 = Ay + uy*u_gamma;
-                    connection.u_side_x2 = -Ax;
-                    connection.u_side_y2 = -Ay;
-
-                    connection.v_side_x1 = Ax + vx*v_gamma;
-                    connection.v_side_y1 = Ay + vy*v_gamma;
-                    connection.v_side_x2 = -Ax;
-                    connection.v_side_y2 = -Ay;
+                    connection.v_side_x1 = Ax;
+                    connection.v_side_y1 = Ay;
+                    connection.v_side_x2 = -Ax + vx*v_gamma;
+                    connection.v_side_y2 = -Ay + vy*v_gamma;
 
                     connection.has_circle = false;
                     connection.has_primitive = true;
-                    connection.primitive_x1 = connection.v_side_x1;
-                    connection.primitive_y1 = connection.v_side_y1;
-                    connection.primitive_x2 = connection.u_side_x1;
-                    connection.primitive_y2 = connection.u_side_y1;
-                    connection.primitive_x3 = -Ax;
-                    connection.primitive_y3 = -Ay;
+                    connection.primitive_x1 = connection.v_side_x2;
+                    connection.primitive_y1 = connection.v_side_y2;
+                    connection.primitive_x2 = connection.u_side_x2;
+                    connection.primitive_y2 = connection.u_side_y2;
+                    connection.primitive_x3 = Ax;
+                    connection.primitive_y3 = Ay;
 
                     //no need to set uvs because is simple triangle
                 }
@@ -638,10 +696,43 @@ public class Render {
                 }
             }
 
+            //if is concave flip on each side ***1 and ***2.
+            //This ensures that when doing normal oriented polygon contour,
+            // will always join up right
+            float twice_area2 = ux*vy - uy*vx;
+            if(twice_area2 > 0 && false)
+            {
+                float old_u_side_x1 = connection.u_side_x1;
+                float old_u_side_y1 = connection.u_side_y1;
+                float old_u_side_x2 = connection.u_side_x2;
+                float old_u_side_y2 = connection.u_side_y2;
+
+                float old_v_side_x1 = connection.v_side_x1;
+                float old_v_side_y1 = connection.v_side_y1;
+                float old_v_side_x2 = connection.v_side_x2;
+                float old_v_side_y2 = connection.v_side_y2;
+
+                connection.u_side_x1 = old_u_side_x2;
+                connection.u_side_y1 = old_u_side_y2;
+                connection.u_side_x2 = old_u_side_x1;
+                connection.u_side_y2 = old_u_side_y1;
+
+                connection.v_side_x1 = old_v_side_x2;
+                connection.v_side_y1 = old_v_side_y2;
+                connection.v_side_x2 = old_v_side_x1;
+                connection.v_side_y2 = old_v_side_y1;
+            }
+
             return connection;
         }
 
-        static Line_Connection calculate_line_connection(Line_Connection connection, float x1, float y1, float x2, float y2, float x3, float y3, float r, boolean do_rounded)
+        public static Line_Connection flip_line_connection(Line_Connection connection, boolean convex)
+        {
+            //A is always up
+            return connection;
+        }
+
+        public static Line_Connection calculate_line_connection(Line_Connection connection, float x1, float y1, float x2, float y2, float x3, float y3, float r, boolean do_rounded, float sharp_connection_threshold)
         {
             float ux = x1-x2;
             float uy = y1-y2;
@@ -662,34 +753,35 @@ public class Render {
                 vy /= v_mag;
             }
 
-            return calculate_line_connection(connection, ux, uy, vx, vy, r, r, do_rounded, LINE_CONNECTION_DEF_CUT_CORNER_THRESHOLD, LINE_CONNECTION_DEF_PERPEND_EPSILON);
+            return calculate_line_connection(connection, ux, uy, vx, vy, r, r, do_rounded, sharp_connection_threshold, LINE_CONNECTION_DEF_PERPEND_EPSILON);
+        }
+
+        public void submit_connection_primitive(Line_Connection con, float x, float y, int color, Matrix3f transform_or_null)
+        {
+            if(con.has_circle)
+            {
+                float r = con.r;
+                submit(
+                    x + con.circle_x1, y + con.circle_y1, con.circle_x1/r, con.circle_y1/r, color,
+                    x + con.circle_x2, y + con.circle_y2, con.circle_x2/r, con.circle_y2/r, color,
+                    x + con.circle_x3, y + con.circle_y3, con.circle_x3/r, con.circle_y3/r, color,
+                    FLAG_CIRCLE, transform_or_null
+                );
+            }
+            if(con.has_primitive)
+            {
+                submit(
+                    x + con.primitive_x1, y + con.primitive_y1, 0, 0, color,
+                    x + con.primitive_x2, y + con.primitive_y2, 0, 0, color,
+                    x + con.primitive_x3, y + con.primitive_y3, 0, 0, color,
+                    0, transform_or_null
+                );
+            }
         }
 
         public void submit_connected_line(Line_Connection from, Line_Connection to, float from_x, float from_y, float to_x, float to_y, int color, Matrix3f transform_or_null)
         {
-            if(to.has_primitive)
-            {
-                submit(
-                        to_x + to.primitive_x1, to_y + to.primitive_y1, 0, 0, color,
-                        to_x + to.primitive_x2, to_y + to.primitive_y2, 0, 0, color,
-                        to_x + to.primitive_x3, to_y + to.primitive_y3, 0, 0, color,
-                        0, transform_or_null
-                );
-            }
-
-            float r = to.r;
-            if(to.has_circle)
-            {
-                submit(
-                        to_x + to.circle_x1, to_y + to.circle_y1, to.circle_x1/r, to.circle_y1/r, color,
-                        to_x + to.circle_x2, to_y + to.circle_y2, to.circle_x2/r, to.circle_y2/r, color,
-                        to_x + to.circle_x3, to_y + to.circle_y3, to.circle_x3/r, to.circle_y3/r, color,
-                        FLAG_CIRCLE, transform_or_null
-                );
-            }
-
-            submit_line(from_x, from_y, to_x, to_y, 0.005f, 0xFFFFFF, transform_or_null);
-
+            submit_connection_primitive(to, to_x, to_y, color, transform_or_null);
             float begin_top_x = from_x + from.v_side_x1;
             float begin_top_y = from_y + from.v_side_y1;
             float begin_bot_x = from_x + from.v_side_x2;
@@ -699,36 +791,7 @@ public class Render {
             float end_top_y = to_y + to.u_side_y1;
             float end_bot_x = to_x + to.u_side_x2;
             float end_bot_y = to_y + to.u_side_y2;
-
-            //Ignore undeterminacy for now since its not needed
-            if(false)
-                if(to.undetermined || from.undetermined)
-                {
-                    float true_dirx = to_x - from_x;
-                    float true_diry = to_y - from_y;
-                    float true_dir_mag = hypot(true_dirx, true_diry);
-
-                    float dir1x = end_top_x - begin_top_x;
-                    float dir1y = end_top_y - begin_top_y;
-                    float dir1_mag = hypot(dir1x, dir1y);
-
-                    float dir2x = end_bot_x - begin_top_x;
-                    float dir2y = end_bot_y - begin_top_y;
-                    float dir2_mag = hypot(dir2x, dir2y);
-
-                    float similarity1 = (true_dirx*dir1x + true_diry*dir1y)/(true_dir_mag*dir1_mag);
-                    float similarity2 = (true_dirx*dir2x + true_diry*dir2y)/(true_dir_mag*dir2_mag);
-                    if(similarity1 < similarity2)
-                    {
-                        float tempx = end_top_x;
-                        float tempy = end_top_y;
-                        end_top_x = end_bot_x;
-                        end_top_y = end_bot_y;
-                        end_bot_x = tempx;
-                        end_bot_y = tempy;
-                    }
-                }
-
+                    
             submit(
                     begin_top_x, begin_top_y, 0, 0, color,
                     begin_bot_x, begin_bot_y, 0, 0, color,
@@ -743,7 +806,7 @@ public class Render {
             );
         }
 
-        public void submit_connected_line(float[] xs, float[] ys, float[] derx, float[] dery, int from, int to, float width, int color, Matrix3f transform_or_null)
+        public void submit_derivative_connected_line(float[] xs, float[] ys, float[] derx, float[] dery, int from, int to, float width, int color, Matrix3f transform_or_null)
         {
             float r = width/2;
             float p11x = 0;
@@ -769,8 +832,8 @@ public class Render {
                 float p22y = ys[i] + der_x*r;
 
                 if(i > 0) {
-                    this.submit_bezier_or_triangle(p11x, p11y, p21x, p21y, p22x, p22y, color, 0, null);
-                    this.submit_bezier_or_triangle(p11x, p11y, p12x, p12y, p22x, p22y, color, 0, null);
+                    this.submit_triangle(p11x, p11y, p21x, p21y, p22x, p22y, color, 0, null);
+                    this.submit_triangle(p11x, p11y, p12x, p12y, p22x, p22y, color, 0, null);
                 }
 
                 p11x = p21x;
@@ -782,19 +845,87 @@ public class Render {
             }
         }
 
+        public void submit_derivative_connected_line(
+            float[] xs, float[] ys, float[] derx, float[] dery, int from, int to, 
+            Line_Connection con_from, Line_Connection con_to, float width, int color, Matrix3f transform_or_null)
+        {
+            if(to - from < 2)
+                return;
+
+            float r = width/2;
+            float p11x = 0;
+            float p11y = 0;
+            float p12x = 0;
+            float p12y = 0;
+
+            int start = from;
+            int end = to;
+            if(con_from != null) {
+                p11x = xs[0] + con_from.v_side_x1;
+                p11y = ys[0] + con_from.v_side_y1;
+                p12x = xs[0] + con_from.v_side_x2;
+                p12y = ys[0] + con_from.v_side_y2;
+                start += 1;
+            }
+
+            if(con_to != null)
+                end -= 1;
+
+            for(int i = start; i < end; i++)
+            {
+                float mag = (float) Math.sqrt(derx[i]*derx[i] + dery[i]*dery[i]);
+                float der_x = derx[i]/mag;
+                float der_y = dery[i]/mag;
+
+                float p21x = xs[i] + der_y*r;
+                float p21y = ys[i] - der_x*r;
+                float p22x = xs[i] - der_y*r;
+                float p22y = ys[i] + der_x*r;
+                
+                if(i > from) {
+                    this.submit_triangle(p11x, p11y, p21x, p21y, p22x, p22y, color, 0, null);
+                    this.submit_triangle(p11x, p11y, p12x, p12y, p22x, p22y, color, 0, null);
+                }
+
+                p11x = p21x;
+                p11y = p21y;
+                p12x = p22x;
+                p12y = p22y;
+            }
+
+            if(con_to != null) {
+                float p21x = xs[to-1] + con_to.u_side_x1;
+                float p21y = ys[to-1] + con_to.u_side_y1;
+                float p22x = xs[to-1] + con_to.u_side_x2;
+                float p22y = ys[to-1] + con_to.u_side_y2;
+
+                this.submit_triangle(p11x, p11y, p21x, p21y, p22x, p22y, color, 0, null);
+                this.submit_triangle(p11x, p11y, p12x, p12y, p22x, p22y, color, 0, null);
+
+                submit_connection_primitive(con_to, xs[to-1], ys[to-1], color, transform_or_null);
+            }
+        }
+
         public void submit_bezier_line(Triangulate.PointArray points, Triangulate.PointArray ders, float x1, float y1, float x2, float y2, float x3, float y3, float epsilon, float r, int color, Matrix3f transform_or_null)
         {
             points.resize(0);
             ders.resize(0);
             Main.sample_bezier(points, ders, x1, y1, x2, y2, x3, y3, 0, 10, epsilon);
-            submit_connected_line(points.xs, points.ys, ders.xs, ders.ys, 0, points.length, r, color, transform_or_null);
+            submit_derivative_connected_line(points.xs, points.ys, ders.xs, ders.ys, 0, points.length, r, color, transform_or_null);
+        }
+        public void submit_bezier_line(Line_Connection from, Line_Connection to, Triangulate.PointArray points, Triangulate.PointArray ders, float x1, float y1, float x2, float y2, float x3, float y3, float epsilon, float r, int color, Matrix3f transform_or_null)
+        {
+            points.resize(0);
+            ders.resize(0);
+            Main.sample_bezier(points, ders, x1, y1, x2, y2, x3, y3, 0, 10, epsilon);
+            submit_derivative_connected_line(points.xs, points.ys, ders.xs, ders.ys, 0, points.length, from, to, r, color, transform_or_null);
         }
 
-        public void submit_index_buffer(float[] xs, float[] ys, Triangulate.IndexBuffer indices, int color, int flags, Matrix3f transform_or_null)
+        public void submit_indexed_triangles(float[] xs, float[] ys, Triangulate.IndexBuffer indices, int color, int flags, Matrix3f transform_or_null)
         {
             for(int i = 0; i < indices.length; i += 3)
             {
-                this.submit_bezier_or_triangle(
+                this.submit_triangle(
                         xs[indices.at(i)], ys[indices.at(i)],
                         xs[indices.at(i+1)], ys[indices.at(i+1)],
                         xs[indices.at(i+2)], ys[indices.at(i+2)],

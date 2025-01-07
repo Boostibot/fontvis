@@ -451,7 +451,7 @@ public class Main {
         }
         */
         {
-            Triangulated_Glyph triangulated = glyph_cache.get("&".codePointAt(0));
+            Triangulated_Glyph triangulated = glyph_cache.get("ξ".codePointAt(0));
             Processed_Glyph processed = triangulated.glyph;
 
             //triangulate
@@ -463,42 +463,84 @@ public class Main {
             int concave_flags = Render.Bezier_Buffer.FLAG_BEZIER
                     | Render.Bezier_Buffer.FLAG_INVERSE;
 
-            glyph_buffer.submit_index_buffer(processed.points.xs, processed.points.ys, triangulated.triangles, solids_color, 0, null);
-            glyph_buffer.submit_index_buffer(processed.points.xs, processed.points.ys, triangulated.convex_beziers, solids_color, convex_flags, null);
-            glyph_buffer.submit_index_buffer(processed.points.xs, processed.points.ys, triangulated.concave_beziers, solids_color, concave_flags, null);
+            glyph_buffer.submit_indexed_triangles(processed.points.xs, processed.points.ys, triangulated.triangles, solids_color, 0, null);
+            glyph_buffer.submit_indexed_triangles(processed.points.xs, processed.points.ys, triangulated.convex_beziers, solids_color, convex_flags, null);
+            glyph_buffer.submit_indexed_triangles(processed.points.xs, processed.points.ys, triangulated.concave_beziers, solids_color, concave_flags, null);
             {
                 Triangulate.PointArray temp_points = new Triangulate.PointArray();
                 Triangulate.PointArray temp_ders = new Triangulate.PointArray();
+                Render.Bezier_Buffer.Line_Connection[] connections = {
+                    new Render.Bezier_Buffer.Line_Connection(),
+                    new Render.Bezier_Buffer.Line_Connection(),
+                };
+
                 float[] xs = processed.points.xs;
                 float[] ys = processed.points.ys;
-                float r = 0.005f;
-                int color = 0xFF0000;
+                float r = 0.05f;
+                float bezier_epsilon = 0.0005f;
+                boolean do_rounded = false;
+                float sharp_cutoff_threshold = 1f;
+                int color = 0xAAFF0000;
                 for(var shape : processed.shapes)
                 {
-                    float p1x = xs[shape.at(shape.length - 1)];
-                    float p1y = ys[shape.at(shape.length - 1)];
-                    for(int i = 0; i < shape.length; i += 2)
+                    //if length is 2 its a single vertex
+                    //if length is >= 4 its at least a line...
+                    if(shape.length >= 4)
                     {
-                        float p2x = xs[shape.at(i)];
-                        float p2y = ys[shape.at(i)];
-                        float p3x = xs[shape.at(i+1)];
-                        float p3y = ys[shape.at(i+1)];
+                        float pmx = xs[shape.at(shape.length - 3)];
+                        float pmy = ys[shape.at(shape.length - 3)];
+                        float p0x = xs[shape.at(shape.length - 2)];
+                        float p0y = ys[shape.at(shape.length - 2)];
+                        float p1x = xs[shape.at(shape.length - 1)];
+                        float p1y = ys[shape.at(shape.length - 1)];
+                        for(int it = 0; it <= shape.length; it += 2)
+                        {
+                            int i = it;
+                            if(i >= shape.length)
+                                i = 0;
 
-                        if(p2x == p3x && p2y == p3y)
-                            glyph_buffer.submit_line(
-                                p1x, p1y,
-                                p2x, p2y, r, color, null
-                            );
-                        else
-                            glyph_buffer.submit_bezier_line(temp_points, temp_ders,
-                                p1x, p1y,
-                                p2x, p2y,
-                                p3x, p3y,
-                                0.001f, r, color, null
-                            );
+                            int vi = shape.at(i);
+                            int vn = shape.at(i+1);
+                            float p2x = xs[vi];
+                            float p2y = ys[vi];
+                            float p3x = xs[vn];
+                            float p3y = ys[vn];
 
-                        p1x = p3x;
-                        p1y = p3y;
+                            Render.Bezier_Buffer.Line_Connection prev_connection = connections[(it/2+1) & 1];
+                            Render.Bezier_Buffer.Line_Connection curr_connection = connections[(it/2+0) & 1];
+
+                            if((p0x == p1x && p0y == p1y)) {
+                                Render.Bezier_Buffer.calculate_line_connection(curr_connection, pmx, pmy, p1x, p1y, p2x, p2y, r, do_rounded, sharp_cutoff_threshold);
+                                if(it > 0) {
+                                    glyph_buffer.submit_connected_line(
+                                        prev_connection, curr_connection,
+                                        pmx, pmy,
+                                        p1x, p1y, color, null
+                                    );
+                                }
+                            }
+                            else {
+                                Render.Bezier_Buffer.calculate_line_connection(curr_connection, p0x, p0y, p1x, p1y, p2x, p2y, r, do_rounded, sharp_cutoff_threshold);
+                                if(it > 0) {
+                                    glyph_buffer.submit_bezier_line(
+                                        prev_connection, curr_connection,
+                                        temp_points, temp_ders,
+                                        pmx, pmy,
+                                        p0x, p0y,
+                                        p1x, p1y,
+                                        bezier_epsilon, 2*r, color, null
+                                    );
+                                }
+                            }
+
+//                            glyph_buffer.submit_circle(pmx + prev_connection.v_side_x1, pmy + prev_connection.v_side_y1, r/2, 0xFF, null);
+                            pmx = p1x;
+                            pmy = p1y;
+                            p0x = p2x;
+                            p0y = p2y;
+                            p1x = p3x;
+                            p1y = p3y;
+                        }
                     }
                 }
             }
