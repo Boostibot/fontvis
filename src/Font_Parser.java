@@ -9,22 +9,12 @@ import java.util.HashMap;
 import java.nio.file.Files;
 
 public final class Font_Parser {
-    public static final class Countour
-    {
-        //is quadratic/linear bezier countour:
-        // - if is solid is counter-clockwise
-        // - if is hole is clockwise
-        // - is built from connected segments
-        // The segments are pairs of points [p1, p2]
-        //TODO explain better
-        public int[] xs = new int[0];
-        public int[] ys = new int[0];
-    }
-
     public static final class Glyph
     {
-        public Countour[] solids = new Countour[0];
-        public Countour[] holes = new Countour[0];
+        public int[] xs;
+        public int[] ys;
+        public boolean[] on_curve;
+        public int[] contour_ends;
 
         public int unicode;
         public int index;
@@ -620,148 +610,10 @@ public final class Font_Parser {
                 }
             }
 
-            ArrayList<Countour> solids = new ArrayList<>();
-            ArrayList<Countour> holes = new ArrayList<>();
-
-            //process into contours
-            for(int k = 0; k < contour_ends.length; k++)
-            {
-                int start_i = k == 0 ? 0 : contour_ends[k-1];
-                int end_i = contour_ends[k];
-
-                int input_points = end_i - start_i;
-                if(input_points <= 0)
-                    continue;
-
-                //count implied and control points
-                int implied_points = 0;
-                int on_curve_points = 0;
-                {
-                    int j = end_i - 1;
-                    for(int i = start_i; i < end_i; i++) {
-                        if(points_on_curve[i])
-                            on_curve_points += 1;
-                        if(points_on_curve[j] == false && points_on_curve[i] == false)
-                            implied_points += 1;
-                        j = i;
-                    }
-                }
-
-                //add all implied points and reverse
-                int with_implied_count = input_points + implied_points;
-                int[] with_implied_x = new int[with_implied_count];
-                int[] with_implied_y = new int[with_implied_count];
-                boolean[] with_implied_on_curve = new boolean[with_implied_count];
-                {
-                    int push_i = with_implied_count;
-                    int j = end_i - 1;
-                    for(int i = start_i; i < end_i; i++) {
-                        if(points_on_curve[j] == false && points_on_curve[i] == false)
-                        {
-                            push_i -= 1;
-                            with_implied_x[push_i] = (points_x[j] + points_x[i])/2;
-                            with_implied_y[push_i] = (points_y[j] + points_y[i])/2;
-                            with_implied_on_curve[push_i] = true;
-                        }
-
-                        push_i -= 1;
-                        with_implied_x[push_i] = points_x[i];
-                        with_implied_y[push_i] = points_y[i];
-                        with_implied_on_curve[push_i] = points_on_curve[i];
-                        j = i;
-                    }
-                    assert push_i == 0;
-                }
-
-                //form valid segments
-                int total_points = on_curve_points + implied_points;
-                int[] xs = new int[2*total_points];
-                int[] ys = new int[2*total_points];
-
-                {
-                    //add all on curve points and assume they form linear segments
-                    int push_i = 0;
-                    for(int i = 0; i < with_implied_count; i++) {
-                        if(with_implied_on_curve[i] )
-                        {
-                            //connection
-                            xs[2*push_i] = with_implied_x[i];
-                            ys[2*push_i] = with_implied_y[i];
-                            //destination
-                            xs[2*push_i + 1] = with_implied_x[i];
-                            ys[2*push_i + 1] = with_implied_y[i];
-                            push_i += 1;
-                        }
-                    }
-                    assert push_i == total_points;
-
-                    //override some connections with bezier curves
-                    int write_i = 0;
-                    for(int i = 0; i < with_implied_count; i++) {
-                        if(with_implied_on_curve[i])
-                            write_i = (write_i + 1) % total_points;
-                        else
-                        {
-                            xs[2*write_i] = with_implied_x[i];;
-                            ys[2*write_i] = with_implied_y[i];;
-                        }
-                    }
-                }
-
-                //copy over in reverse order and also fill in implied points,
-                // doubled linear segments etc.
-                if(false)
-                {
-                    int push_i = 2*total_points;
-                    int j = end_i - 1;
-                    for(int i = start_i; i < end_i; i++)
-                    {
-                        if(points_on_curve[j] == points_on_curve[i])
-                        {
-                            //linear segment
-                            if(points_on_curve[i])
-                            {
-                                push_i -= 1;
-                                xs[push_i] = points_x[j];
-                                ys[push_i] = points_y[j];
-                            }
-                            //implied point
-                            else
-                            {
-                                push_i -= 1;
-                                xs[push_i] = (points_x[j] + points_x[i])/2;
-                                ys[push_i] = (points_y[j] + points_y[i])/2;
-                            }
-                        }
-
-                        push_i -= 1;
-                        assert points_on_curve[i] == (push_i % 2 == 0);
-                        xs[push_i] = points_x[i];
-                        ys[push_i] = points_y[i];
-                    }
-                }
-
-                //calculate signed area
-                long signed_area = 0;
-                for(int i = 0; i < total_points; i++)
-                {
-                    int j = i+1 < total_points ? i+1 : 0;
-                    signed_area += (long)xs[i] * ys[j] - (long)xs[j] * ys[i];
-                }
-
-                Countour contour = new Countour();
-                contour.xs = xs;
-                contour.ys = ys;
-
-                if(signed_area >= 0)
-                    solids.add(contour);
-                else
-                    holes.add(contour);
-            }
-
-            Countour[] temp = new Countour[0];
-            glyph.solids = solids.toArray(temp);
-            glyph.holes = holes.toArray(temp);
+            glyph.xs = points_x;
+            glyph.ys = points_y;
+            glyph.on_curve = points_on_curve;
+            glyph.contour_ends = contour_ends;
             return glyph;
         }
         else
@@ -841,24 +693,36 @@ public final class Font_Parser {
                 offset.val = loc;
 
                 //transform its points
-                for(int i = 0; i < primitive.solids.length + primitive.holes.length; i++)
+                for (int i = 0; i < primitive.xs.length; i++)
                 {
-                    Countour countour = i < primitive.solids.length
-                        ? primitive.solids[i]
-                        : primitive.holes[i - primitive.solids.length];
+                    int x = primitive.xs[i];
+                    int y = primitive.ys[i];
+                    double xPrime = i_hat_x*x + j_hat_x*y + offsetX;
+                    double yPrime = i_hat_y*x + j_hat_y*y + offsetY;
 
-                    long x = countour.xs[i];
-                    long y = countour.ys[i];
-
-                    double x_prime = i_hat_x*x + j_hat_x*y + offsetX;
-                    double y_prime = i_hat_y*x + j_hat_y*y + offsetY;
-
-                    countour.xs[i] = (int) x_prime;
-                    countour.ys[i] = (int) y_prime;
+                    primitive.xs[i] = (int) xPrime;
+                    primitive.ys[i] = (int) yPrime;
                 }
 
-                compound.solids = array_concat(compound.solids, primitive.solids);
-                compound.holes = array_concat(compound.holes, primitive.holes);
+                //Add the primitive to the compound (if is the first one steal its data)
+                if(compound.xs == null)
+                {
+                    compound.xs = primitive.xs;
+                    compound.ys = primitive.ys;
+                    compound.contour_ends = primitive.contour_ends;
+                    compound.on_curve = primitive.on_curve;
+                }
+                else
+                {
+                    //Offset the end indeces
+                    for (int i = 0; i < primitive.contour_ends.length; i++)
+                        primitive.contour_ends[i] += compound.xs.length;
+
+                    compound.xs = array_concat(compound.xs, primitive.xs);
+                    compound.ys = array_concat(compound.ys, primitive.ys);
+                    compound.on_curve = array_concat(compound.on_curve, primitive.on_curve);
+                    compound.contour_ends = array_concat(compound.contour_ends, primitive.contour_ends);
+                }
             }
 
             return compound;

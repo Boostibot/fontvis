@@ -3,20 +3,40 @@ import static org.lwjgl.opengl.GL43C.*;
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.system.MemoryUtil.*;
 
+import java.lang.Math;
 import java.nio.IntBuffer;
 import java.util.ArrayList;
+import java.util.HashMap;
 
 import org.joml.*;
 import org.lwjgl.glfw.GLFWVidMode;
 import org.lwjgl.opengl.*;
 import org.lwjgl.system.MemoryStack;
 
+//tomorrow:
+// connect lines
+// submit outline
+// line cache as a part of glyph
+// text layouting
+// basic typing
+// instructions on screen (seperate buffer)
+// background (line) shader
+
 public class Main {
     private int width = 1200;
     private int height = 800;
     private int mouseX = 0;
     private int mouseY = 0;
-    private boolean viewing = false;
+    private boolean panning = false;
+    private float zoom_val = 1;
+    private float rotation = 0;
+    private float dt = 0;
+
+    static float ZOOM_SPEED_KEY = 2;
+    static float ZOOM_SPEED_SCROLL = 2;
+    static float CAMERA_SPEED = 2;
+    static float SPRINT_CAMERA_SPEED = 10;
+    static float ROTATE_SPEED = 1;
 
     private final Quaternionf orientation = new Quaternionf();
     private final Vector3f position = new Vector3f(0, 0, 0);
@@ -26,158 +46,309 @@ public class Main {
     public static final int MB = 1024*1024;
     public static final int GB = 1024*1024*1024;
 
+    /*
+    Triangulate.PointArray normalized = new Triangulate.PointArray();
+    Triangulate.bezier_normalize_y(normalized, xs, ys, Triangulate.IndexBuffer.til(xs.length));
 
-    //I dont think this is worth it tbh. Just suck it and go home...
-    //
-    public static int raycast_bezier_first_optimistic_hit(int explucde_i, float[] xs, float[] ys, int from_i, int to_i, float origin_x, float origin_y, float dir_x, float dir_y)
-    {
-        Splines.Intersections intersections = new Splines.Intersections();
-        int j = to_i - 2;
-        for(int i = from_i; i < to_i; i += 2)
+    for(int yi = 0; yi < resy; yi++)
+        for(int xi = 0; xi < resx; xi++)
         {
-            if(i != explucde_i)
-            {
-                float x1 = xs[j+1];
-                float y1 = ys[j+1];
-                float x2 = xs[i];
-                float y2 = ys[i];
-                float x3 = xs[i+1];
-                float y3 = ys[i+1];
+            float x = (float) xi/resx*scale_x;
+            float y = (float) yi/resy*scale_y;
 
-                if(Splines.bezier_line_intersect(intersections, x1, y1, x2, y2, x3, y3, dir_x, dir_y, origin_x, origin_y) > 0)
-                    return i;
-            }
+            boolean inside = Triangulate.is_inside_normalized_bezier(
+                    Triangulate.POINT_IN_SHAPE_BOUNDARY_DONT_CARE,
+                    normalized.xs, normalized.ys, 0, normalized.length, x, y);
 
-            j = i;
+            if(is_solid)
+                bitmap[xi + yi*resx] = bitmap[xi + yi*resx] || inside;
+            else
+                bitmap[xi + yi*resx] = bitmap[xi + yi*resx] && !inside;
         }
+     */
 
-        return -1;
+    public static class Processed_Glyph
+    {
+        public int solids_count;
+        public int holes_count;
+        public Triangulate.PointArray points;
+        public Triangulate.IndexBuffer[] shapes;
+        public boolean[] are_solid;
+        //todo bezier lengths!
+
+        public int unicode;
+        public int advance_width;
+        public int left_side_bearing;
     }
 
-    public static Triangulate.PointArray bezier_make_polygon_embeddable(float[] xs, float[] ys, int from_i, int to_i)
+    //TODO make this more optimized - allocate just once etc. ...
+    public static Processed_Glyph preprocess_glyph(Font_Parser.Glyph glyph, int units_per_em)
     {
-        Triangulate.PointArray out = new Triangulate.PointArray();
-        out.reserve(to_i - from_i + 8);
+        Triangulate.IndexBuffer[] shapes = new Triangulate.IndexBuffer[glyph.contour_ends.length];
+        boolean[] are_solid = new boolean[glyph.contour_ends.length];
+        int[] contour_ends = glyph.contour_ends;
+        Triangulate.PointArray processed = new Triangulate.PointArray();
+        processed.reserve(2*glyph.xs.length + 4);
 
-        int max_bisections = 4;
-        int j = to_i - 2;
-        for(int i = from_i; i < to_i; i += 2)
+        //find maximum length segment
+        int max_segment = 0;
+        for(int k = 0; k < contour_ends.length; k++)
         {
-            float x1 = xs[j+1];
-            float y1 = ys[j+1];
-            float x2 = xs[i];
-            float y2 = ys[i];
-            float x3 = xs[i+1];
-            float y3 = ys[i+1];
+            int start_i = k == 0 ? 0 : contour_ends[k-1];
+            int end_i = contour_ends[k];
+            max_segment = Math.max(max_segment, end_i - start_i);
+        }
 
-            //if isnt straight segment
-            if(x2 != x3 || y2 != y2)
+        //allocate temporary storage
+        Triangulate.PointArray with_implied_points = new Triangulate.PointArray();
+        Triangulate.BoolArray with_implied_on_curve = new Triangulate.BoolArray();
+        with_implied_points.reserve(max_segment*5/4 + 4);
+        with_implied_on_curve.reserve(max_segment*5/4 + 4);
+
+        //process into contours
+        int solid_count = 0;
+        int hole_count = 0;
+        for(int k = 0; k < contour_ends.length; k++)
+        {
+            int start_i = k == 0 ? 0 : contour_ends[k-1];
+            int end_i = contour_ends[k];
+
+            int input_points = end_i - start_i;
+            if(input_points <= 0)
+                continue;
+
+            //calculate signed area in counter-clockwise direction
+            // because of this is negative for solids and positive for holes
+            long signed_area = 0;
             {
-                //bisect up to max_bisections times
-                int bi = 0;
-                for(; bi <= max_bisections; bi++)
-                {
-                    boolean did_hit = false;
-                    int test_count = 1 << (bi + 1);
-                    for(int test_i = 1; test_i < test_count; test_i ++)
-                    {
-                        //test if bise
-                        float bi_t = (float)test_i/test_count;
-                        float origin_x = Splines.bezier(x1, x2, x3, bi_t);
-                        float origin_y = Splines.bezier(x1, x2, x3, bi_t);
-
-                        float dir_x = x2 - origin_x;
-                        float dir_y = y2 - origin_y;
-
-                        int hit = raycast_bezier_first_optimistic_hit(i, xs, ys, from_i, to_i, origin_x, origin_y, dir_x, dir_y);
-                        if(hit != -1)
-                        {
-                            System.out.println(STR."Found an overlap at index \{i} bisection \{bi}");
-                            did_hit = true;
-                            break;
-                        }
-                    }
-
-                    if(did_hit == false)
-                        break;
+                int j = end_i - 1;
+                for(int i = start_i; i < end_i; i++) {
+                    signed_area += (long)glyph.xs[i]*glyph.ys[j] - (long)glyph.xs[j]*glyph.ys[i];
+                    j = i;
                 }
             }
 
-            j = i;
+            boolean is_solid = signed_area >= 0;
+            if(is_solid)
+                solid_count += 1;
+            else
+                hole_count += 1;
+
+            //add all implied points
+            int on_curve_points = 0;
+            int implied_points = 0;
+            with_implied_points.resize(0);
+            with_implied_on_curve.resize(0);
+            {
+                float units_per_em_float = units_per_em;
+                int j = 0;
+                for(int i = end_i; i-- > start_i;) {
+                    if(glyph.on_curve[j] == false && glyph.on_curve[i] == false)
+                    {
+                        int mid_x = (glyph.xs[j] + glyph.xs[i])/2;
+                        int mid_y = (glyph.ys[j] + glyph.ys[i])/2;
+                        with_implied_points.push(mid_x/units_per_em_float, mid_y/units_per_em_float);
+                        with_implied_on_curve.push(true);
+                        implied_points += 1;
+                    }
+
+                    if(glyph.on_curve[i])
+                        on_curve_points += 1;
+
+                    with_implied_points.push(glyph.xs[i]/units_per_em_float, glyph.ys[i]/units_per_em_float);
+                    with_implied_on_curve.push(glyph.on_curve[i]);
+                    j = i;
+                }
+            }
+
+            int total_points = on_curve_points + implied_points;
+            int out_from_i = processed.length;
+            int out_to_i = processed.length + 2*total_points;
+            assert processed.length % 2 == 0;
+
+            processed.reserve(out_to_i);
+
+            //add all on curve points in reverse order and assume they form linear segments
+            for(int i = 0; i < with_implied_points.length; i++) {
+                if(with_implied_on_curve.items[i] )
+                {
+                    processed.push(
+                        with_implied_points.xs[i], with_implied_points.ys[i],
+                        with_implied_points.xs[i], with_implied_points.ys[i]
+                    );
+                }
+            }
+            assert processed.length == out_to_i;
+            assert processed.length % 2 == 0;
+
+            //override some connections with bezier curves
+            int write_i = 0;
+            for(int i = 0; i < with_implied_points.length; i++) {
+                if(with_implied_on_curve.items[i])
+                    write_i = write_i+1 < total_points ? write_i+1 : 0;
+                else
+                {
+                    assert out_from_i + 2*write_i < out_to_i;
+                    processed.xs[out_from_i + 2*write_i] = with_implied_points.xs[i];;
+                    processed.ys[out_from_i + 2*write_i] = with_implied_points.ys[i];;
+                }
+            }
+
+            are_solid[k] = is_solid;
+            shapes[k] = Triangulate.IndexBuffer.range(out_from_i, out_to_i);
         }
+
+        Processed_Glyph out = new Processed_Glyph();
+        out.advance_width = glyph.advance_width;
+        out.left_side_bearing = glyph.left_side_bearing;
+        out.unicode = glyph.unicode;
+        out.points = processed;
+        out.are_solid = are_solid;
+        out.shapes = shapes;
+        out.solids_count = solid_count;
+        out.holes_count = hole_count;
 
         return out;
     }
 
-    public boolean[] rasterize_glyph(Font_Parser.Glyph glyph, int resx, int resy, float scale_x, float scale_y, float units_per_em)
+    public static class Triangulated_Glyph
     {
-        boolean[] bitmap = new boolean[resx*resy];
+        public Processed_Glyph glyph;
+        public Triangulate.IndexBuffer[] connected_solids;
+        public Triangulate.IndexBuffer triangles;
+        public Triangulate.IndexBuffer convex_beziers;
+        public Triangulate.IndexBuffer concave_beziers;
+    }
 
-        for(int k = 0; k < glyph.solids.length + glyph.holes.length; k++)
+    public static Triangulated_Glyph triangulate_glyph(Processed_Glyph glyph)
+    {
+        Triangulate.IndexBuffer triangles = new Triangulate.IndexBuffer();
+        Triangulate.IndexBuffer convex_beziers = new Triangulate.IndexBuffer();
+        Triangulate.IndexBuffer concave_beziers = new Triangulate.IndexBuffer();
+
+        //split into polygonal and bezier part
+        Triangulate.IndexBuffer[] polygon_holes = new Triangulate.IndexBuffer[glyph.holes_count];
+        Triangulate.IndexBuffer[] polygon_solids = new Triangulate.IndexBuffer[glyph.solids_count];
         {
-            Font_Parser.Countour countour = k < glyph.solids.length
-                    ? glyph.solids[k]
-                    : glyph.holes[k - glyph.solids.length];
+            int solid_count = 0;
+            int hole_count = 0;
+            for(int k = 0; k < glyph.shapes.length; k++)
+            {
+                Triangulate.IndexBuffer shape = glyph.shapes[k];
+                Triangulate.IndexBuffer polygon = new Triangulate.IndexBuffer();
+                polygon.reserve(shape.length/2);
+                Triangulate.bezier_contour_classify(polygon, convex_beziers, concave_beziers, glyph.points.xs, glyph.points.ys, shape, (float) 1e-5, true);
 
-            boolean is_solid = k < glyph.solids.length;
-            float xs[] = new float[countour.xs.length];
-            float ys[] = new float[countour.ys.length];
-            for(int i = 0; i < countour.xs.length; i++) {
-                xs[i] = (float) countour.xs[i]/units_per_em;
-                ys[i] = (float) countour.ys[i]/units_per_em;
+                if(glyph.are_solid[k])
+                    polygon_solids[solid_count++] = polygon;
+                else
+                    polygon_holes[hole_count++] = polygon;
             }
-
-            Triangulate.PointArray normalized = new Triangulate.PointArray();
-            Triangulate.bezier_normalize_y(normalized, xs, ys, Triangulate.IndexBuffer.til(xs.length));
-
-            for(int yi = 0; yi < resy; yi++)
-                for(int xi = 0; xi < resx; xi++)
-                {
-                    float x = (float) xi/resx*scale_x;
-                    float y = (float) yi/resy*scale_y;
-
-                    boolean inside = Triangulate.is_inside_normalized_bezier(
-                        Triangulate.POINT_IN_SHAPE_BOUNDARY_DONT_CARE,
-                        normalized.xs, normalized.ys, 0, normalized.length, x, y);
-
-                    if(is_solid)
-                        bitmap[xi + yi*resx] = bitmap[xi + yi*resx] || inside;
-                    else
-                        bitmap[xi + yi*resx] = bitmap[xi + yi*resx] && !inside;
-                }
         }
 
-        return bitmap;
+        //connect solids with holes
+        Triangulate.IndexBuffer[] connected_solids = new Triangulate.IndexBuffer[glyph.solids_count];
+        for(int k = 0; k < glyph.solids_count; k++)
+            connected_solids[k] = Triangulate.connect_holes(null, glyph.points.xs, glyph.points.ys, polygon_solids[k], polygon_holes);
+
+        for(int k = 0; k < connected_solids.length; k++)
+            Triangulate.triangulate(triangles, glyph.points.xs, glyph.points.ys, connected_solids[k], true);
+
+        Triangulated_Glyph out = new Triangulated_Glyph();
+        out.connected_solids = connected_solids;
+        out.triangles = triangles;
+        out.concave_beziers = concave_beziers;
+        out.convex_beziers = convex_beziers;
+        out.glyph = glyph;
+        return out;
     }
 
-    /*
-    public static Geometry trianglulate_glyph(Font_Parser.Glyph glyph, float units_per_em)
+    static void sample_bezier(Triangulate.PointArray points, Triangulate.PointArray derivatives, float x1, float y1, float x2, float y2, float x3, float y3, int min_times_log2, int max_times_log2, float min_error)
     {
+        class H {
+            static float sqr_dist(float x1, float y1, float x2, float y2) {
+                float dx = x1 - x2;
+                float dy = y1 - y2;
+                return dx*dx + dy*dy;
+            }
 
+            static void sample_recursive(Triangulate.PointArray points, Triangulate.PointArray derivatives, float x1, float y1, float x2, float y2, float x3, float y3, int min_times_log2, int max_times_log2, float sqr_min_error, int depth)
+            {
+                if(depth > max_times_log2)
+                    return;
 
-        assert glyph.points_x.length == glyph.points_y.length;
-        assert glyph.points_x.length == glyph.points_on_curve.length;
-        assert glyph.contour_end_indices.length > 0;
+                float area = Triangulate.cross_product_z(x2, y2, x1, y1, x3, y3);
+                float sqr_base = sqr_dist(x1, y1, x3, y3);
+                if(area*area <= sqr_min_error*sqr_base && depth >= min_times_log2)
+                    return;
 
-        boolean[] on_curve = glyph.points_on_curve.clone();
-        float[] xs = new float[glyph.points_x.length];
-        float[] ys = new float[glyph.points_y.length];
+                float x_mid = Splines.bezier(x1, x2, x3, 0.5f);
+                float y_mid = Splines.bezier(y1, y2, y3, 0.5f);
 
-        for(int i = 0; i < glyph.points_x.length; i++)
-            xs[i] = glyph.points_x[i]/units_per_em;
+                float lo_x2 = (x1 + x2)/2;
+                float lo_y2 = (y1 + y2)/2;
+                sample_recursive(points, derivatives, x1, y1, lo_x2, lo_y2, x_mid, y_mid, min_times_log2, max_times_log2, sqr_min_error, depth + 1);
 
-        for(int i = 0; i < glyph.points_y.length; i++)
-            ys[i] = glyph.points_y[i]/units_per_em;
+                points.push(x_mid, y_mid);
+                if(derivatives != null)
+                {
+                    derivatives.push(
+                        Splines.bezier_derivative(x1, x2, x3, 0.5f),
+                        Splines.bezier_derivative(y1, y2, y3, 0.5f)
+                    );
+                }
 
-        return new Geometry();
+                float hi_x2 = (x2 + x3)/2;
+                float hi_y2 = (y2 + y3)/2;
+                sample_recursive(points, derivatives, x_mid, y_mid, hi_x2, hi_y2, x3, y3, min_times_log2, max_times_log2, sqr_min_error, depth + 1);
+            }
+        }
+
+        float sqr_min_error = min_error*min_error;
+        //detect problematic curves and subdivide them at least once
+        if(min_times_log2 == 0)
+            if(H.sqr_dist(x1, y1, x3, y3) == 0 && H.sqr_dist(x1, y1, x2, y2) != 0)
+                min_times_log2 = 1;
+
+        points.push(x1, y1);
+        if(derivatives != null)
+            derivatives.push(
+                Splines.bezier_derivative(x1, x2, x3, 0),
+                Splines.bezier_derivative(y1, y2, y3, 0)
+            );
+        H.sample_recursive(points, derivatives, x1, y1, x2, y2, x3, y3, min_times_log2, max_times_log2, sqr_min_error, 0);
+        points.push(x3, y3);
+        if(derivatives != null)
+            derivatives.push(
+                    Splines.bezier_derivative(x1, x2, x3, 1),
+                    Splines.bezier_derivative(y1, y2, y3, 1)
+            );
     }
-     */
+
+    static void sample_bezier(Triangulate.PointArray points, float x1, float y1, float x2, float y2, float x3, float y3, float min_error)
+    {
+        sample_bezier(points, null, x1, y1, x2, y2, x3, y3, 0, 16, min_error);
+    }
 
     private void run() {
+
         ArrayList<Font_Parser.Font_Log> logs = new ArrayList<>();
-        Font_Parser.Font font = Font_Parser.parse_load("/home/boosti/repos/vector_graphics/assets/fonts/Roboto/Roboto-Black.ttf", logs);
+        Font_Parser.Font font = Font_Parser.parse_load("./assets/fonts/Roboto/Roboto-Black.ttf", logs);
         if(font == null || font.glyphs == null)
             throw new IllegalStateException("Unable to Read font file");
+
+        HashMap<Integer, Triangulated_Glyph> glyph_cache = new HashMap<>();
+        {
+            final long start_time = System.currentTimeMillis();
+            for (var entry : font.glyphs.entrySet()) {
+                Font_Parser.Glyph glyph = entry.getValue();
+                Processed_Glyph processed = preprocess_glyph(glyph, font.units_per_em);
+                Triangulated_Glyph triangulated = triangulate_glyph(processed);
+                glyph_cache.put(triangulated.glyph.unicode, triangulated);
+            }
+            final long end_time = System.currentTimeMillis();
+            System.out.println(STR."Processing took \{end_time-start_time} ms");
+        }
 
         if (!glfwInit())
             throw new IllegalStateException("Unable to initialize GLFW");
@@ -207,23 +378,28 @@ public class Main {
                 glViewport(0, 0, width, height);
             }
         });
-        glfwSetCursorPosCallback(window, (long window2, double xpos, double ypos) -> {
-            if (viewing) {
+        glfwSetCursorPosCallback(window, (long window_, double xpos, double ypos) -> {
+            if (panning) {
+                float zoom = (float) Math.exp(zoom_val);
                 float deltaX = (float) xpos - mouseX;
                 float deltaY = (float) ypos - mouseY;
-                position.x += deltaX/width*2;
-                position.y -= deltaY/height*2;
+                position.x += deltaX/width*2/zoom;
+                position.y -= deltaY/height*2/zoom;
 
                 //orientation.rotateLocalX(deltaY * 0.01f).rotateLocalY(deltaX * 0.01f);
             }
             mouseX = (int) xpos;
             mouseY = (int) ypos;
         });
-        glfwSetMouseButtonCallback(window, (long window4, int button, int action, int mods) -> {
+        glfwSetMouseButtonCallback(window, (long window_, int button, int action, int mods) -> {
             if (button == GLFW_MOUSE_BUTTON_1 && action == GLFW_PRESS)
-                viewing = true;
+                panning = true;
             else
-                viewing = false;
+                panning = false;
+        });
+
+        glfwSetScrollCallback(window, (long window_, double deltax, double deltay) -> {
+            zoom_val += (float)deltax*ZOOM_SPEED_SCROLL*dt;
         });
 
         try (MemoryStack stack = stackPush()) {
@@ -258,6 +434,7 @@ public class Main {
         Render.Bezier_Buffer glyph_buffer = new Render.Bezier_Buffer(4*MB);
         glyph_buffer.grows = false;
 
+        /*
         if(false)
         {
             int resx = 200;
@@ -272,148 +449,70 @@ public class Main {
                     if(raster[xi + yi*resx])
                         glyph_buffer.submit_circle((float)xi/resx, (float)yi/resy, 0.5f/resx, 0x0, null);
         }
-
+        */
         {
-            Font_Parser.Glyph glyph = font.glyphs.get("š".codePointAt(0));
-
-            int solids_count = glyph.solids.length;
-            int holes_count = glyph.holes.length;
-            int shapes_count = glyph.solids.length + glyph.holes.length;
-            Triangulate.PointArray points = new Triangulate.PointArray();
-
-            Triangulate.IndexBuffer[] shapes = new Triangulate.IndexBuffer[shapes_count];
-            boolean[] are_solid = new boolean[shapes_count];
-
-            //prepare the shapes
-            for(int k = 0; k < shapes_count; k++)
-            {
-                Font_Parser.Countour countour = k < glyph.solids.length
-                        ? glyph.solids[k]
-                        : glyph.holes[k - glyph.solids.length];
-
-                Triangulate.PointArray shape = new Triangulate.PointArray();
-                boolean is_solid = k < glyph.solids.length;
-                int from = points.length;
-                int to = points.length + countour.xs.length;
-                points.resize(to);
-
-                for(int i = 0; i < countour.xs.length; i++) {
-                    points.xs[from + i] = (float) countour.xs[i]/font.units_per_em;
-                    points.ys[from + i] = (float) countour.ys[i]/font.units_per_em;
-                }
-
-                shapes[k] = Triangulate.IndexBuffer.range(from, to);
-                are_solid[k] = is_solid;
-            }
-
-            //split into polygonal and bezier part
-            Triangulate.IndexBuffer[] polygon_shapes = new Triangulate.IndexBuffer[shapes_count];
-            Triangulate.IndexBuffer[] convex_bezier_shapes = new Triangulate.IndexBuffer[shapes_count];
-            Triangulate.IndexBuffer[] concave_bezier_shapes = new Triangulate.IndexBuffer[shapes_count];
-            {
-                for(int k = 0; k < shapes.length; k++)
-                {
-                    Triangulate.IndexBuffer shape = shapes[k];
-                    Triangulate.IndexBuffer polygon = new Triangulate.IndexBuffer();
-                    Triangulate.IndexBuffer convex_beziers = new Triangulate.IndexBuffer();
-                    Triangulate.IndexBuffer concave_beziers = new Triangulate.IndexBuffer();
-                    polygon.reserve(shape.length/2);
-
-                    float eps = (float) 1e-5;
-                    int j = shape.length - 2;
-                    for(int i = 0; i < shape.length; i += 2)
-                    {
-                        int vp = shape.at(j+1);
-                        int vc = shape.at(i+0);
-                        int vn = shape.at(i+1);
-
-                        float x1 = points.xs[vp];
-                        float y1 = points.ys[vp];
-                        float x2 = points.xs[vc];
-                        float y2 = points.ys[vc];
-                        float x3 = points.xs[vn];
-                        float y3 = points.ys[vn];
-
-                        float cross = Triangulate.cross_product_z(x1, y1, x2, y2, x3, y3);
-                        if(cross > eps) {
-                            polygon.push(vn);
-                            convex_beziers.push(vp, vc, vn);
-                        }
-                        else if(cross < -eps){
-                            polygon.push(vc, vn);
-                            concave_beziers.push(vp, vc, vn);
-                        }
-                        else
-                            polygon.push(vn);
-                        j = i;
-                    }
-
-                    polygon_shapes[k] = polygon;
-                    convex_bezier_shapes[k] = convex_beziers;
-                    concave_bezier_shapes[k] = concave_beziers;
-                }
-            }
-
-            //aggregate all holes into array
-            Triangulate.IndexBuffer[] holes = new Triangulate.IndexBuffer[holes_count];
-            {
-                int hole_i = 0;
-                for(int k = 0; k < shapes.length; k++)
-                    if(are_solid[k] == false)
-                        holes[hole_i++] = polygon_shapes[k];
-            }
-
-            //connect solids with holes
-            Triangulate.IndexBuffer[] connected_solids = new Triangulate.IndexBuffer[solids_count];
-            {
-
-                //connect each solid with each hole - holes that are outside the shape will
-                // not be counted in
-                int solid_i = 0;
-                for(int k = 0; k < shapes.length; k++) {
-                    if(are_solid[k])
-                    {
-                        Triangulate.IndexBuffer solid = polygon_shapes[k];
-                        connected_solids[solid_i++] = Triangulate.connect_holes(null,
-                            points.xs, points.ys, solid, holes);
-                    }
-                }
-            }
+            Triangulated_Glyph triangulated = glyph_cache.get("&".codePointAt(0));
+            Processed_Glyph processed = triangulated.glyph;
 
             //triangulate
             int[] colors = {0xFF0000, 0x00FF00, 0x0000FF, 0xFF0000, 0x00FF00, 0x0000FF, 0xFF0000, 0x00FF00, 0x0000FF};
 
-            Triangulate.IndexBuffer triangles[] = new Triangulate.IndexBuffer[solids_count];
-            for(int k = 0; k < solids_count; k++)
-                triangles[k] = Triangulate.triangulate(null, points.xs, points.ys, connected_solids[k]);
-
-            //Draw triangulated polygonal regions
+            //Draw triangulated solid regions
             int solids_color = 0x00;
-            for(int k = 0; k < triangles.length; k++)
-            {
-                int flags = 0;
-                glyph_buffer.submit_index_buffer(points.xs, points.ys, triangles[k], solids_color, flags, null);
-            }
+            int convex_flags = Render.Bezier_Buffer.FLAG_BEZIER;
+            int concave_flags = Render.Bezier_Buffer.FLAG_BEZIER
+                    | Render.Bezier_Buffer.FLAG_INVERSE;
 
-            //draw bezier segments
-            for(int k = 0; k < polygon_shapes.length; k++)
+            glyph_buffer.submit_index_buffer(processed.points.xs, processed.points.ys, triangulated.triangles, solids_color, 0, null);
+            glyph_buffer.submit_index_buffer(processed.points.xs, processed.points.ys, triangulated.convex_beziers, solids_color, convex_flags, null);
+            glyph_buffer.submit_index_buffer(processed.points.xs, processed.points.ys, triangulated.concave_beziers, solids_color, concave_flags, null);
             {
-                int convex_flags = Render.Bezier_Buffer.FLAG_BEZIER;
-                int concave_flags = Render.Bezier_Buffer.FLAG_BEZIER
-                        | Render.Bezier_Buffer.FLAG_INVERSE;
+                Triangulate.PointArray temp_points = new Triangulate.PointArray();
+                Triangulate.PointArray temp_ders = new Triangulate.PointArray();
+                float[] xs = processed.points.xs;
+                float[] ys = processed.points.ys;
+                float r = 0.005f;
+                int color = 0xFF0000;
+                for(var shape : processed.shapes)
+                {
+                    float p1x = xs[shape.at(shape.length - 1)];
+                    float p1y = ys[shape.at(shape.length - 1)];
+                    for(int i = 0; i < shape.length; i += 2)
+                    {
+                        float p2x = xs[shape.at(i)];
+                        float p2y = ys[shape.at(i)];
+                        float p3x = xs[shape.at(i+1)];
+                        float p3y = ys[shape.at(i+1)];
 
-                glyph_buffer.submit_index_buffer(points.xs, points.ys, convex_bezier_shapes[k], solids_color, convex_flags, null);
-                glyph_buffer.submit_index_buffer(points.xs, points.ys, concave_bezier_shapes[k], solids_color, concave_flags, null);
+                        if(p2x == p3x && p2y == p3y)
+                            glyph_buffer.submit_line(
+                                p1x, p1y,
+                                p2x, p2y, r, color, null
+                            );
+                        else
+                            glyph_buffer.submit_bezier_line(temp_points, temp_ders,
+                                p1x, p1y,
+                                p2x, p2y,
+                                p3x, p3y,
+                                0.001f, r, color, null
+                            );
+
+                        p1x = p3x;
+                        p1y = p3y;
+                    }
+                }
             }
 
             //draw connections polygons
             if(false)
-            for(int k = 0; k < solids_count; k++)
+            {
+            Triangulate.PointArray points = processed.points;
+            for(int k = 0; k < processed.solids_count; k++)
             {
                 //int point_color = 0x330000FF;
                 int point_color = colors[k];
                 float r = 0.005f;
-                Triangulate.IndexBuffer connected = connected_solids[k];
+                Triangulate.IndexBuffer connected = triangulated.connected_solids[k];
 
                 int j = connected.length - 1;
                 for(int i = 0; i < connected.length; i++)
@@ -425,6 +524,7 @@ public class Main {
                     j = i;
                 }
             }
+            }
         }
 
 
@@ -434,30 +534,31 @@ public class Main {
         Matrix3f transf_matrix = new Matrix3f();
         Matrix4f model_matrix = new Matrix4f();
 
-        float rotation = 0;
-        float rotate_speed = 1;
-        float zoom = 1;
-        float speed = 2f;
+
 
         Colorspace clear_color = new Colorspace(0.9f, 0.9f, 0.9f).srgb_to_lin();
         glfwShowWindow(window);
         long lastTime = System.nanoTime();
+
+        Vector3f move_dir = new Vector3f();
+        Vector3f view_position = new Vector3f();
         while (!glfwWindowShouldClose(window)) {
 
             try (MemoryStack frame_stack = stackPush()) {
 
                 long thisTime = System.nanoTime();
-                float dt = (thisTime - lastTime) * 1E-9f;
+                dt = (thisTime - lastTime) * 1E-9f;
                 lastTime = thisTime;
 
+                float camera_speed = CAMERA_SPEED;
                 glfwPollEvents();
-                Vector3f move_dir = new Vector3f();
+                move_dir.zero();
                 if (keyDown[GLFW_KEY_LEFT_SHIFT])
-                    speed = 10f;
+                    camera_speed = SPRINT_CAMERA_SPEED;
                 if (keyDown[GLFW_KEY_Q])
-                    rotation -= 1f * rotate_speed * dt;
+                    rotation -= 1f * ROTATE_SPEED*dt;
                 if (keyDown[GLFW_KEY_E])
-                    rotation += 1f * rotate_speed * dt;
+                    rotation += 1f * ROTATE_SPEED*dt;
 
                 if (keyDown[GLFW_KEY_D])
                     move_dir.x += 1;
@@ -469,16 +570,16 @@ public class Main {
                     move_dir.y -= 1;
 
                 if (keyDown[GLFW_KEY_O])
-                    zoom -= 1*dt;
+                    zoom_val -= ZOOM_SPEED_KEY *dt;
                 if (keyDown[GLFW_KEY_P])
-                    zoom += 1*dt;
+                    zoom_val += ZOOM_SPEED_KEY *dt;
 
+                float zoom = (float) Math.exp(zoom_val);
                 if(move_dir.x != 0 || move_dir.y != 0)
-                    position.add(move_dir.normalize().mul(dt * speed));
+                    position.add(move_dir.normalize().mul(dt * camera_speed/zoom));
 
-                //view_matrix.identity().rotateLocalZ(rotation).translate(position).scale(zoom).scaleXY((float)height/width, 1);
-                //view_matrix.identity().scale(zoom).scaleXY((float)height/width, 1).rotateLocalZ(rotation).translate(position);
-                view_matrix.identity().scaleXY((float)height/width, 1).scale(zoom).rotateZ(rotation).translateLocal(position);
+                view_position.set(position).mul(zoom);
+                view_matrix.identity().scaleXY((float)height/width, 1).rotateZ(rotation).translateLocal(view_position).scale(zoom);
 
                 glClearColor(clear_color.x, clear_color.y, clear_color.z, clear_color.a);
                 glClear(GL_COLOR_BUFFER_BIT);

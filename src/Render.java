@@ -369,24 +369,9 @@ public class Render {
             );
         }
 
-        public static int MOD(int val, int range)
-        {
-            return (((val) % (range) + (range)) % (range));
-        }
-
         public static float hypot(float a, float b)
         {
             return (float) Math.sqrt(a*a + b*b);
-        }
-
-        public static boolean is_near(float a, float b, double epsilon)
-        {
-            return Math.abs(a - b) < epsilon;
-        }
-
-        public static boolean is_near(float a, float b)
-        {
-            return is_near(a, b, 1e-7);
         }
 
         static final class Line_Connection
@@ -477,9 +462,6 @@ public class Render {
             //                          \     /
             //                          |  /
             //                           B
-
-//            assert is_near(hypot(ux, uy), 1); //Needs to be normalized
-//            assert is_near(hypot(vx, vy), 1); //Needs to be normalized
 
             final float PERPEND_EPSILON = 0.0001f;
 
@@ -761,85 +743,51 @@ public class Render {
             );
         }
 
-        static Line_Connection[] SUMBIT_GLYPH_CONNECTIONS = {new Line_Connection(), new Line_Connection()};
-        public void submit_glyph_contour(Font_Parser.Glyph glyph, float scale, float width, int color, boolean rounded_joints, Matrix3f transform_or_null)
+        public void submit_connected_line(float[] xs, float[] ys, float[] derx, float[] dery, int from, int to, float width, int color, Matrix3f transform_or_null)
         {
             float r = width/2;
-            for(int k = 0; k < glyph.solids.length + glyph.holes.length; k++)
+            float p11x = 0;
+            float p11y = 0;
+            float p12x = 0;
+            float p12y = 0;
+
+            float old_der_x = 1;
+            float old_der_y = 0;
+            for(int i = from; i < to; i++)
             {
-                Font_Parser.Countour countour = k < glyph.solids.length
-                        ? glyph.solids[k]
-                        : glyph.holes[k - glyph.solids.length];
-
-                assert countour.xs.length == countour.ys.length;
-
-                int prev = countour.xs.length - 1;
-                for(int i = 0; i + 1 <= countour.xs.length; i += 2)
-                {
-                    int control = i;
-                    int curr = i + 1;
-
-                    float x1 = countour.xs[prev]*scale;
-                    float y1 = countour.ys[prev]*scale;
-                    float x2 = countour.xs[control]*scale;
-                    float y2 = countour.ys[control]*scale;
-                    float x3 = countour.xs[curr]*scale;
-                    float y3 = countour.ys[curr]*scale;
-
-                    if(false)
-                    {
-
-                    if(i == 0)
-                        submit_circle(x1, y2, r, 0x00FF00, transform_or_null);
-
-                    submit_line(x1, y1, x2, y2, width, 0x55FF0000, transform_or_null);
-                    submit_line(x2, y2, x3, y3, width, color, transform_or_null);
-
-                    if(x2 != x3 || y2 != y3)
-                        submit_circle(x2, y2, r, 0x0000FF, transform_or_null);
-                    }
-
-                    if(true)
-                    if(x2 == x3 && y2 == y3)
-                        submit_line(x1, y1, x3, y3, width, color, transform_or_null);
-                    else
-                        submit_bezier_contour(x1, y1, x2, y2, x3, y3, width, color, false, 20, 20, transform_or_null);
-                    prev = curr;
+                float mag = (float) Math.sqrt(derx[i]*derx[i] + dery[i]*dery[i]);
+                float der_x = derx[i]/mag;
+                float der_y = dery[i]/mag;
+                if(mag == 0) {
+                    der_x = old_der_x;
+                    der_y = old_der_y;
                 }
+
+                float p21x = xs[i] + der_y*r;
+                float p21y = ys[i] - der_x*r;
+                float p22x = xs[i] - der_y*r;
+                float p22y = ys[i] + der_x*r;
+
+                if(i > 0) {
+                    this.submit_bezier_or_triangle(p11x, p11y, p21x, p21y, p22x, p22y, color, 0, null);
+                    this.submit_bezier_or_triangle(p11x, p11y, p12x, p12y, p22x, p22y, color, 0, null);
+                }
+
+                p11x = p21x;
+                p11y = p21y;
+                p12x = p22x;
+                p12y = p22y;
+                old_der_x = der_x;
+                old_der_y = der_y;
             }
         }
 
-        static Line_Connection[] SUMBIT_BEZIER_CONNECTIONS = {new Line_Connection(), new Line_Connection()};
-        public void submit_bezier_contour(float x1, float y1, float x2, float y2, float x3, float y3, float width, int color, boolean rounded_joints, int min_segments, int max_segments, Matrix3f transform_or_null)
+        public void submit_bezier_line(Triangulate.PointArray points, Triangulate.PointArray ders, float x1, float y1, float x2, float y2, float x3, float y3, float epsilon, float r, int color, Matrix3f transform_or_null)
         {
-            float r = width/2;
-            float prev_x = x1;
-            float prev_y = y1;
-            if(rounded_joints)
-                submit_circle(prev_x, prev_y, r, color, transform_or_null);
-
-            for(int i = 0; i < min_segments; i++)
-            {
-                float t = (float) (i + 1)/min_segments;
-
-                float curr_x = Splines.bezier(x1, x2, x3, t);
-                float curr_y = Splines.bezier(y1, y2, y3, t);
-
-                int inset_prev = (i+1) & 1;
-                int inset_curr = i & 1;
-
-//                Line_Connection prev_connection = SUMBIT_BEZIER_CONNECTIONS[inset_prev];
-//                Line_Connection curr_connection = SUMBIT_BEZIER_CONNECTIONS[inset_curr];
-//                calculate_line_connection(curr_connection, x1, y1, x2, y2, x3, y3, r, rounded_joints);
-
-//                submit_connected_line(prev_connection, curr_connection, x1, y1, x2, y2, color, transform_or_null);
-
-                submit_line(prev_x, prev_y, curr_x, curr_y, width, color, transform_or_null);
-                submit_circle(curr_x, curr_y, r, color, transform_or_null);
-
-                prev_x = curr_x;
-                prev_y = curr_y;
-            }
+            points.resize(0);
+            ders.resize(0);
+            Main.sample_bezier(points, ders, x1, y1, x2, y2, x3, y3, 0, 10, epsilon);
+            submit_connected_line(points.xs, points.ys, ders.xs, ders.ys, 0, points.length, r, color, transform_or_null);
         }
 
         public void submit_index_buffer(float[] xs, float[] ys, Triangulate.IndexBuffer indices, int color, int flags, Matrix3f transform_or_null)
@@ -870,7 +818,7 @@ public class Render {
                 if(transform_or_null != null)
                     SUBMIT_TEXT_COUBNTOUR_TEMP_MATRIX.mulLocal(transform_or_null);
 
-                submit_glyph_contour(glyph, scale, width, color, true, SUBMIT_TEXT_COUBNTOUR_TEMP_MATRIX);
+//                submit_glyph_contour(glyph, scale, width, color, true, SUBMIT_TEXT_COUBNTOUR_TEMP_MATRIX);
                 text_position += glyph.advance_width;
                 i += 1;
             }

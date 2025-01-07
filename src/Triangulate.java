@@ -308,9 +308,48 @@ public final class Triangulate {
         bezier_normalize_append_y(into, xs, ys, indices);
     }
 
-    public static void match_holes()
+    public static void bezier_contour_classify(IndexBuffer polygon, IndexBuffer convex_beziers, IndexBuffer concave_beziers, float[] xs, float[] ys, IndexBuffer indices, float linear_epsilon, boolean append)
     {
+        if(append == false) {
+            if(polygon != null) polygon.resize(0);
+            if(convex_beziers != null) convex_beziers.resize(0);
+            if(concave_beziers != null) concave_beziers.resize(0);
+        }
 
+        assert indices.length % 2 == 0;
+        int j = indices.length - 2;
+        for(int i = 0; i < indices.length; i += 2)
+        {
+            int vp = indices.at(j+1);
+            int vc = indices.at(i+0);
+            int vn = indices.at(i+1);
+
+            float x1 = xs[vp];
+            float y1 = ys[vp];
+            float x2 = xs[vc];
+            float y2 = ys[vc];
+            float x3 = xs[vn];
+            float y3 = ys[vn];
+
+            float cross = Triangulate.cross_product_z(x1, y1, x2, y2, x3, y3);
+            if(cross > linear_epsilon) {
+                if(polygon != null) polygon.push(vn);
+                if(convex_beziers != null) convex_beziers.push(vp, vc, vn);
+            }
+            else if(cross < -linear_epsilon){
+                if(polygon != null) polygon.push(vc, vn);
+                if(concave_beziers != null) concave_beziers.push(vp, vc, vn);
+            }
+            else if(polygon != null)
+                polygon.push(vn);
+            j = i;
+        }
+    }
+
+    public static void bezier_contour_classify(IndexBuffer polygon_or_null, IndexBuffer convex_beziers_or_null, IndexBuffer concave_beziers_or_null, float[] xs, float[] ys, IndexBuffer indices)
+    {
+        float eps = (float) 1e-4;
+        bezier_contour_classify(polygon_or_null, convex_beziers_or_null, concave_beziers_or_null, xs, ys, indices, eps, false);
     }
 
     public static IndexBuffer connect_holes(IndexBuffer into, float[] xs, float[] ys, IndexBuffer indices, IndexBuffer[] holes)
@@ -410,11 +449,12 @@ public final class Triangulate {
         return into;
     }
 
-    public static IndexBuffer triangulate(IndexBuffer triangle_indices, float[] xs, float[] ys, IndexBuffer indices)
+    public static IndexBuffer triangulate(IndexBuffer triangle_indices, float[] xs, float[] ys, IndexBuffer indices, boolean append)
     {
         if(triangle_indices == null)
             triangle_indices = new IndexBuffer();
-        triangle_indices.resize(0);
+        if(append == false)
+            triangle_indices.resize(0);
         triangle_indices.reserve(3*indices.length);
 
         int remaining_len = indices.length;
@@ -925,7 +965,7 @@ public final class Triangulate {
         return out;
     }
 
-    public static AABB_Vertices aabb_calculate(float[] xs, float[] ys, int[] indices)
+    public static AABB_Vertices aabb_calculate(float[] xs, float[] ys, IndexBuffer indices)
     {
         AABB_Vertices aabb = new AABB_Vertices();
         if(indices.length > 0)
@@ -936,7 +976,7 @@ public final class Triangulate {
             aabb.y1 = Float.NEGATIVE_INFINITY;
             for(int k = 0; k < indices.length; k++)
             {
-                int index = indices[k];
+                int index = indices.at(k);
                 if(aabb.x0 >= xs[index]) {
                     aabb.x0 = xs[index];
                     aabb.x0_index = k;
@@ -958,10 +998,10 @@ public final class Triangulate {
                 }
             }
 
-            aabb.x0_vertex = indices[aabb.x0_index];
-            aabb.x1_vertex = indices[aabb.x1_index];
-            aabb.y0_vertex = indices[aabb.y0_index];
-            aabb.y1_vertex = indices[aabb.y1_index];
+            aabb.x0_vertex = indices.at(aabb.x0_index);
+            aabb.x1_vertex = indices.at(aabb.x1_index);
+            aabb.y0_vertex = indices.at(aabb.y0_index);
+            aabb.y1_vertex = indices.at(aabb.y1_index);
         }
         return aabb;
     }
