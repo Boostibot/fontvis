@@ -45,7 +45,7 @@ public class Main {
     Render.Quadratic_Bezier_Render render;
     Render.Bezier_Buffer ui_buffer = new Render.Bezier_Buffer(64*MB, false);
     Render.Bezier_Buffer glyph_buffer = new Render.Bezier_Buffer(4*MB, false);
-    Outline_Cache outline_cache = new Outline_Cache();
+    Outline_Cache outline_cache = new Outline_Cache(16*MB);
 
     ArrayList<Font> fonts = new ArrayList<>();
 
@@ -64,21 +64,80 @@ public class Main {
         public static final int FLAG_SHOW_TRIANGLES = 8;
         public static final int FLAG_DANCING = 16;
 
-        public short font_index = 0;
+        public short font_index;
         public short font_gen;
 
-        public float size = 0.05f;
-        public int color = 0x00;
+        public float size;
+        public int color;
         public float outline_width;
-        public float outline_sharpness = 0.7f;
+        public float outline_sharpness;
         public int outline_color;
         public float spacing_x;
         public float spacing_y;
-        public float spacing_scale_x = 1;
-        public float spacing_scale_y = 1;
+        public float spacing_scale_x;
+        public float spacing_scale_y;
 
         public int flags;
         public Matrix3f transform;
+
+        public Text_Style()
+        {
+            set_default();
+        }
+
+        public void set_default()
+        {
+            font_index = 0;
+            font_gen = 0;
+            size = 0.05f;
+            color = 0;
+            outline_width = 0;
+            outline_sharpness = 0.7f;
+            outline_color = 0;
+            spacing_x = 0;
+            spacing_y = 0;
+            spacing_scale_x = 1.1f;
+            spacing_scale_y = 1.1f;
+            flags = 0;
+            if(transform != null)
+                transform.identity();
+        }
+
+        public void set(Text_Style other)
+        {
+            font_index = other.font_index;
+            font_gen = other.font_gen;
+            size = other.size;
+            color = other.color;
+            outline_width = other.outline_width;
+            outline_sharpness = other.outline_sharpness;
+            outline_color = other.outline_color;
+            spacing_x = other.spacing_x;
+            spacing_y = other.spacing_y;
+            spacing_scale_x = other.spacing_scale_x;
+            spacing_scale_y = other.spacing_scale_y;
+            flags = other.flags;
+
+            if(transform != null)
+            {
+                if(other.transform != null)
+                    transform.set(other.transform);
+                else
+                    transform.identity();
+            }
+            else
+            {
+                if(other.transform != null)
+                    transform = new Matrix3f(other.transform);
+            }
+        }
+
+        public void set_outline(float width, float sharpness, int color)
+        {
+            outline_width = width;
+            outline_sharpness = sharpness;
+            outline_color = color;
+        }
     }
 
     public static final Text_Style DEF_TEXT_STYLE = new Text_Style();
@@ -96,6 +155,38 @@ public class Main {
         x = (x ^ (x >>> 27)) * 0x94d049bb133111ebL;
         x = x ^ (x >>> 31);
         return x;
+    }
+
+
+    //TODO refactor
+    static boolean print = true;
+    static long print_last_ns;
+    static long print_cooldown_ns = (long) 1e9;
+    public static void set_print_spacing(boolean allow, double cooldown_s)
+    {
+        print = allow;
+        print_cooldown_ns = (long) (cooldown_s * 1e9);
+    }
+
+    public static void log(CharSequence text)
+    {
+        if(print)
+            System.out.println(text);
+    }
+
+    public static boolean spaced_print()
+    {
+        if(print)
+        {
+            long now = System.nanoTime();
+            if(now > print_last_ns + print_cooldown_ns)
+            {
+                print_last_ns = now;
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public static class Outline_Cache_Key
@@ -155,11 +246,11 @@ public class Main {
         Outline_Cache_Entry first;
         Outline_Cache_Entry last;
         Outline_Cache_Entry freelist;
-        Render.Bezier_Buffer staging_buffer = new Render.Bezier_Buffer(64*KB, true);
+        Render.Bezier_Buffer staging_buffer;
 
         long items_count;
         long bytes_count;
-        long capacity = 9999999;
+        long capacity;
         long max_bytes_count;
         long max_items_count;
 
@@ -172,6 +263,19 @@ public class Main {
                 new Render.Bezier_Buffer.Line_Connection(),
         };
 
+        public Outline_Cache(int max_bytes, int staging_buffer_size, boolean can_staging_buffer_grow)
+        {
+            capacity = max_bytes;
+            staging_buffer = new Render.Bezier_Buffer(staging_buffer_size, can_staging_buffer_grow);
+        }
+
+        public Outline_Cache(int max_bytes)
+        {
+            capacity = max_bytes;
+            staging_buffer = new Render.Bezier_Buffer(64*KB, true);
+        }
+
+
         public Render.Bezier_Buffer get(Outline_Cache_Key key)
         {
             Outline_Cache_Entry entry = outlines.get(key);
@@ -179,10 +283,12 @@ public class Main {
             {
                 Font font = fonts.get(key.font);
                 Kept_Glyph glyph = font.glyphs.get(key.unicode);
-                System.out.println(STR."OUTLINE_CACHE info: adding \{Integer.toHexString(key.unicode)} font \{font.fullname} with params width:\{key.width} sharpness:\{key.sharpness} epsilon:\{key.epsilon}");
+                if(spaced_print())
+                    log(STR."OUTLINE_CACHE info: adding \{Integer.toHexString(key.unicode)} font \{font.parsed.name} with params width:\{key.width} sharpness:\{key.sharpness} epsilon:\{key.epsilon}");
                 if(glyph == null)
                 {
-                    System.out.println(STR."OUTLINE_CACHE error: font \{font.fullname} doesnt support glyph \{Integer.toHexString(key.unicode)}");
+                    if(spaced_print())
+                        log(STR."OUTLINE_CACHE error: font \{font.parsed.name} doesnt support glyph \{Integer.toHexString(key.unicode)}");
                     return null;
                 }
 
@@ -198,11 +304,13 @@ public class Main {
                 int bytes = staging_buffer.length*Render.Bezier_Buffer.BYTES_PER_SEGMENT;
                 while(bytes + bytes_count > capacity)
                 {
-                    System.out.println(STR."OUTLINE_CACHE info: cache full evicting \{Integer.toHexString(key.unicode)} font \{font.fullname} with params width:\{key.width} sharpness:\{key.sharpness} epsilon:\{key.epsilon}");
+                    if(spaced_print())
+                        log(STR."OUTLINE_CACHE info: cache full evicting \{Integer.toHexString(key.unicode)} font \{font.parsed.name} with params width:\{key.width} sharpness:\{key.sharpness} epsilon:\{key.epsilon}");
                     if(last == null)
                     {
-                        System.out.println(STR."OUTLINE_CACHE error: no space to store even single shape of size \{(double) bytes/KB}KB");
-                        return null;
+                        if(spaced_print())
+                            log(STR."OUTLINE_CACHE error: no space to store even single outline of size \{(double) bytes/KB}KB. temporarily storing");
+                        break;
                     }
 
                     var unlinked = unlink(last);
@@ -217,22 +325,24 @@ public class Main {
                 //get new empty entry
                 if(freelist == null)
                 {
-                    System.out.println(STR."OUTLINE_CACHE debug: empty entry was created");
+                    if(spaced_print())
+                        log(STR."OUTLINE_CACHE debug: empty entry was created");
                     entry = new Outline_Cache_Entry();
                     entry.key = new Outline_Cache_Key();
                     entry.buffer = new Render.Bezier_Buffer(0, true);
                 }
                 else
                 {
-                    System.out.println(STR."OUTLINE_CACHE debug: empty entry was found in freelist");
+                    if(spaced_print())
+                        log(STR."OUTLINE_CACHE debug: empty entry was found in freelist");
                     entry = freelist;
                     freelist = entry.next;
                 }
 
                 //fill empty entry
                 entry.buffer.grows = true;
-                entry.key.set(key.font, key.unicode, key.width, key.sharpness, key.epsilon);
-                entry.buffer.submit(staging_buffer, 0, staging_buffer.length);
+                entry.key.set(key.font, glyph.processed.unicode, key.width, key.sharpness, key.epsilon);
+                entry.buffer.submit_buffer(staging_buffer, 0, staging_buffer.length);
                 entry.buffer.grows = false;
 
                 //insert into structures
@@ -247,7 +357,7 @@ public class Main {
             else
             {
                 Font font = fonts.get(key.font);
-                //System.out.println(STR."OUTLINE_CACHE info: found in cache \{Integer.toHexString(key.unicode)} font \{font.fullname} with params width:\{key.width} sharpness:\{key.sharpness} epsilon:\{key.epsilon}");
+                //log(STR."OUTLINE_CACHE info: found in cache \{Integer.toHexString(key.unicode)} font \{font.parsed.name} with params width:\{key.width} sharpness:\{key.sharpness} epsilon:\{key.epsilon}");
 
                 //reinsert it as recently used
                 unlink(entry);
@@ -299,58 +409,6 @@ public class Main {
         }
     }
 
-    public static class Font
-    {
-        public String fullname;
-        public String name;
-        public String family;
-        public String subfamily;
-
-        Kept_Glyph missing_glyph = new Kept_Glyph();
-        HashMap<Integer, Kept_Glyph> glyphs = new HashMap<>();
-        Render.Bezier_Buffer glyph_buffer = new Render.Bezier_Buffer(64*KB, true);
-
-        Matrix3f temp_matrix = new Matrix3f();
-    }
-
-    public Text_Style temp_text_style = new Text_Style();
-    public boolean submit_styled_text(float x, float y, float max_x, float max_y, Render.Bezier_Buffer buffer, CharSequence text, Text_Style style, Matrix3f transform_or_null)
-    {
-        if(style == null)
-            style = DEF_TEXT_STYLE;
-
-        if(style.font_index < 0 || style.font_index > fonts.size())
-            return false;
-
-        Font font = fonts.get(style.font_index);
-
-        float curr_x = 0;
-        int k_x = 0;
-        int k_y = 0; //TODO
-        for(int c : text.codePoints().toArray()){
-            Kept_Glyph glyph = font.glyphs.getOrDefault(c, font.missing_glyph);
-            if(glyph == font.missing_glyph)
-                System.err.println(STR."Couldnt render unicode character '\{Character.toChars(c)}' using not found glyph");
-
-            font.temp_matrix.identity();
-            font.temp_matrix.m20 = k_x*style.spacing_x + curr_x + glyph.processed.left_side_bearing*style.spacing_scale_x;
-            font.temp_matrix.scale(style.size);
-            if(transform_or_null != null)
-                font.temp_matrix.mulLocal(transform_or_null);
-
-            buffer.submit(font.glyph_buffer, glyph.triangulated_from, glyph.triangulated_to, font.temp_matrix, true, style.color);
-            if(style.outline_width > 0)
-            {
-                var outline = outline_cache.get(style.font_index, c, style.outline_width, style.outline_sharpness, 0.001f);
-                if(outline != null)
-                    buffer.submit(outline, font.temp_matrix, true, style.outline_color);
-            }
-            curr_x += glyph.processed.advance_width*style.spacing_scale_x;
-            k_x += 1;
-        }
-
-        return true;
-    }
 
     public static class Processed_Glyph
     {
@@ -505,15 +563,6 @@ public class Main {
         public Buffers.IndexBuffer concave_beziers;
     }
 
-    public static class Kept_Glyph
-    {
-        public Processed_Glyph processed;
-        public Buffers.IndexBuffer[] connected_solids;
-
-        public int triangulated_from;
-        public int triangulated_to;
-    }
-
     public static Triangulated_Glyph triangulate_glyph(Processed_Glyph glyph)
     {
         Buffers.IndexBuffer triangles = new Buffers.IndexBuffer();
@@ -559,25 +608,43 @@ public class Main {
         return out;
     }
 
+    public static class Kept_Glyph
+    {
+        public Processed_Glyph processed;
+        public Buffers.IndexBuffer[] connected_solids;
+
+        public int triangulated_from;
+        public int triangulated_to;
+    }
+
+    public static class Font
+    {
+        Font_Parser.Font parsed;
+        Kept_Glyph missing_glyph = new Kept_Glyph();
+        HashMap<Integer, Kept_Glyph> glyphs = new HashMap<>();
+        Render.Bezier_Buffer glyph_buffer = new Render.Bezier_Buffer(64*KB, true);
+
+        Matrix3f temp_matrix = new Matrix3f();
+    }
+
+
     public static boolean font_load(Font out, CharSequence sequence, ArrayList<Font_Parser.Font_Log> logs)
     {
         Font_Parser.Font font = Font_Parser.parse_load(sequence.toString(), logs);
         if(font == null || font.glyphs == null)
             return false;
 
-        out.family = font.family;
-        out.name = font.name;
-        out.subfamily = font.subfamily;
-        out.fullname = font.name; //for now;
+        out.parsed = font;
 
         final long start_time = System.nanoTime();
-        for (var entry : font.glyphs.entrySet()) {
-            Font_Parser.Glyph glyph = entry.getValue();
+        int i = 0;
+        for (Font_Parser.Glyph glyph : font.glyphs) {
+            i += 1;
 
             //process and triangulate
             Processed_Glyph processed = preprocess_glyph(glyph, font.units_per_em);
             if(glyph.unicode == "h".codePointAt(0))
-                System.out.println("!");
+                log("!");
             Triangulated_Glyph triangulated = triangulate_glyph(processed);
 
             //submit into centralized buffer
@@ -600,12 +667,76 @@ public class Main {
             out.glyphs.put(glyph.unicode, kept);
 
             //assign missing glyph
-            if(glyph.index == 0)
+            if(i == 1)
                 out.missing_glyph = kept;
         }
         final long end_time = System.nanoTime();
-        System.out.println(STR."Processing took \{(end_time-start_time)*1e3} us");
+        log(STR."Processing took \{(end_time-start_time)*1e3} us");
         return true;
+    }
+
+    public Text_Style temp_text_style = new Text_Style();
+    public boolean submit_styled_text(float x, float y, float max_x, float min_y, Render.Bezier_Buffer buffer, CharSequence text, Text_Style style)
+    {
+        if(style == null)
+            style = DEF_TEXT_STYLE;
+
+        if(style.font_index < 0 || style.font_index > fonts.size())
+            return false;
+
+        Font font = fonts.get(style.font_index);
+
+        float line_height = (float) font.parsed.line_gap/font.parsed.units_per_em;
+        float curr_x = x;
+        float curr_y = y;
+        for(int c : text.codePoints().toArray()){
+            Kept_Glyph glyph = font.glyphs.getOrDefault(c, font.missing_glyph);
+            if(c != '\r' && c != 'v')
+            {
+                if(glyph == font.missing_glyph)
+                    if(spaced_print())
+                        log(STR."Couldnt render unicode character '\{Character.toChars(c)}' using not found glyph");
+
+                curr_x += glyph.processed.left_side_bearing*style.spacing_scale_x;
+                float glyph_width = glyph.processed.aabb.x1 - glyph.processed.aabb.x0;
+                float advance_x = style.spacing_x + style.spacing_scale_x*glyph_width;// + glyph.processed.advance_width*style.spacing_scale_x;
+
+                if(curr_x + advance_x > max_x || c == '\n')
+                {
+                    curr_y += style.spacing_y + style.spacing_scale_y*line_height;
+                    curr_x = 0;
+                }
+                if(curr_y < min_y)
+                    break;
+
+                if(c != ' ' && c != '\t')
+                {
+                    font.temp_matrix.identity();
+                    font.temp_matrix.m21 = curr_y;
+                    font.temp_matrix.m20 = curr_x;
+                    font.temp_matrix.scale(style.size);
+                    if(style.transform != null)
+                        font.temp_matrix.mulLocal(style.transform);
+
+                    buffer.submit_buffer(font.glyph_buffer, glyph.triangulated_from, glyph.triangulated_to, font.temp_matrix, true, style.color);
+                    if(style.outline_width > 0)
+                    {
+                        var outline = outline_cache.get(style.font_index, glyph.processed.unicode, style.outline_width, style.outline_sharpness, 0.001f);
+                        if(outline != null)
+                            buffer.submit_buffer(outline, font.temp_matrix, true, style.outline_color);
+                    }
+                }
+
+                curr_x += advance_x;
+            }
+        }
+
+        return true;
+    }
+
+    public boolean submit_styled_text(float x, float y, Render.Bezier_Buffer buffer, CharSequence text, Text_Style style)
+    {
+        return submit_styled_text(x, y, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY, buffer, text, style);
     }
 
     public static final int BUTTON_FILL_COLOR = 0xAAAAAA;
@@ -620,16 +751,10 @@ public class Main {
         ui_buffer.submit_rounded_rectangle(x, y, width + 2*BUTTON_OUTLINE_WIDTH, height+2*BUTTON_OUTLINE_WIDTH, BUTTON_CORNER_RADIUS, BUTTON_OUTLINE_COLOR, BUTTON_TRANSFORM);
         ui_buffer.submit_rounded_rectangle(x, y, width, height, BUTTON_CORNER_RADIUS, BUTTON_FILL_COLOR, BUTTON_TRANSFORM);
 
-//        submit_styled_text(
-//                0, 0,
-//                0, 0,
-//                ui_buffer, text, UI_TEXT_STYLE, null
-//        );
-
         submit_styled_text(
             x - width/2 + pad, y + height/2 - pad,
             x + width/2 - pad, y - height/2 + pad,
-                ui_buffer, text, UI_TEXT_STYLE, BUTTON_TRANSFORM
+            ui_buffer, text, UI_TEXT_STYLE
         );
 
         float norm_mouse_x = (float) mouseX/window_width - 0.5f;
@@ -647,10 +772,10 @@ public class Main {
         ArrayList<Font_Parser.Font_Log> logs = new ArrayList<>();
 
         Font loaded = new Font();
-        boolean font_load_state = font_load(loaded, "./assets/fonts/Roboto/Roboto-Black.ttf", logs);
+        boolean font_load_state = font_load(loaded, "./assets/fonts/Roboto/Roboto-Regular.ttf", logs);
         for(var log : logs)
             if(log.category.equals("info") == false && log.category.equals("debug") == false)
-                System.out.println(STR."FONT_PARSE \{log.category}: [\{log.table}] \{log.error}");
+                log(STR."FONT_PARSE \{log.category}: [\{log.table}] \{log.error}");
         if(font_load_state == false)
             throw new IllegalStateException("Unable to Read font file");
 
@@ -748,8 +873,7 @@ public class Main {
 
         Vector3f move_dir = new Vector3f();
         Vector3f view_position = new Vector3f();
-        Colorspace temp_color = new Colorspace(0);
-
+        Text_Style curr_style = new Text_Style();
 
         while (!glfwWindowShouldClose(window)) {
 
@@ -797,15 +921,25 @@ public class Main {
 
                 glyph_buffer.reset();
                 ui_buffer.reset();
-                if(do_button(0, 0, "hello", 0.3f, 0.07f))
-                    ui_buffer.submit_circle(0, 0, 1, 0xFF, null);
+//                if(do_button(0, 0, "hello", 0.3f, 0.07f))
+//                    ui_buffer.submit_circle(0, 0, 1, 0xFF, null);
 //                if(false)
-                {
-                    submit_styled_text(0, 0, 0, 0, glyph_buffer, "hello world", DEF_TEXT_STYLE, null);
+                curr_style.set_default();
+                curr_style.set_outline((float) 3*(int)oscilate(0, 5, thisTime*1e-9)/1000, 0.75f, 0xFF);
+//                curr_style.spacing_x = 0.01f;
+
+                    submit_styled_text(0, 0, glyph_buffer, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ", curr_style);
+                    submit_styled_text(0, -1, glyph_buffer, "~!@#$%^&*()-_=+[]{};:\"'\\,.<>?/", curr_style);
+                    submit_styled_text(0, -2, glyph_buffer, "Αα,Ββ,Γγ,Δδ,Εε,Ζζ,Ηη,Θθ,Ιι,Κκ,Λλ,Μμ,Νν,Ξξ,Οο,Ππ,Ρρ,Σσς,Ττ,Υυ,Φφ,Χχ,Ψψ,Ωω", curr_style);
+                    submit_styled_text(0, -3, glyph_buffer, "あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわゐゑを", curr_style);
+
+
+
 //                    var outline = outline_cache.get(0, "h".codePointAt(0), 0.005f, 0.75f, 0.001f);
 //                    glyph_buffer.submit(outline, null, true, curr_color);
 
-
+                if(false)
+                {
                     Kept_Glyph glyph = loaded.glyphs.getOrDefault("h".codePointAt(0), loaded.missing_glyph);
 
                     float r = 0.005f;
@@ -849,6 +983,16 @@ public class Main {
         float z = (float) Math.pow(Math.cos(1.5 + t)/2 + 0.5f, 2);
         float a = alpha;
         return Colorspace.rgba_to_hex(x, y, z, a);
+    }
+
+    public static float oscilate(double t)
+    {
+        return (float) Math.sin(t)/2 + 0.5f;
+    }
+
+    public static float oscilate(float min, float max, double t)
+    {
+        return oscilate(t)*(max - min) + min;
     }
 
     public static void main(String[] args) {

@@ -5,10 +5,7 @@ import org.joml.Vector4f;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
-import java.nio.IntBuffer;
 import java.util.Arrays;
 
 import static java.lang.Math.abs;
@@ -70,7 +67,7 @@ public class Render {
 
         public void free_all()
         {
-            buffer = null;
+            buffer = new float[0];
             length = 0;
             capacity = 0;
             grows = true;
@@ -100,7 +97,7 @@ public class Render {
             System.arraycopy(this.buffer, from*FLOATS_PER_SEGMENT, into.buffer, into_offset*FLOATS_PER_SEGMENT, (to - from)*FLOATS_PER_SEGMENT);
         }
 
-        public void submit(float[] vertex_data, int float_from, int float_to)
+        public void submit_buffer(float[] vertex_data, int float_from, int float_to)
         {
             int segments = (float_to - float_from)/FLOATS_PER_SEGMENT;
             reserve(length + segments);
@@ -108,28 +105,23 @@ public class Render {
             length += segments;
         }
 
-        public void submit(Bezier_Buffer vertex_data, int from, int to)
+        public void submit_buffer(Bezier_Buffer vertex_data, int from, int to)
         {
             reserve(length + (to - from));
             System.arraycopy(vertex_data.buffer, from*FLOATS_PER_SEGMENT, buffer, length*FLOATS_PER_SEGMENT, (to - from)*FLOATS_PER_SEGMENT);
             length += (to - from);
         }
 
-        public void submit(Bezier_Buffer vertex_data)
-        {
-            submit(vertex_data, 0, vertex_data.length);
-        }
-
-        public void submit(Bezier_Buffer vertex_data, int from, int to, Matrix3f transform, boolean recolor, int color)
+        public void submit_buffer(Bezier_Buffer vertex_data, int from, int to, Matrix3f transform, boolean recolor, int color)
         {
             int before = length;
-            submit(vertex_data, from, to);
+            submit_buffer(vertex_data, from, to);
             transform(before, length, transform, recolor, color);
         }
 
-        public void submit(Bezier_Buffer vertex_data, Matrix3f transform, boolean recolor, int color)
+        public void submit_buffer(Bezier_Buffer vertex_data, Matrix3f transform, boolean recolor, int color)
         {
-            submit(vertex_data, 0, vertex_data.length, transform, recolor, color);
+            submit_buffer(vertex_data, 0, vertex_data.length, transform, recolor, color);
         }
 
         public void transform(int from, int to, Matrix3f transform, boolean recolor, int color)
@@ -922,8 +914,15 @@ public class Render {
                 float p22y = ys[i] + der_x*r;
                 
                 if(i > from) {
-                    this.submit_triangle(p11x, p11y, p21x, p21y, p22x, p22y, color, 0, null);
-                    this.submit_triangle(p11x, p11y, p12x, p12y, p22x, p22y, color, 0, null);
+
+                    this.submit(
+                        p11x, p11y, 0, 0, color,
+                        p21x, p21y, 0, 0, color,
+                        p22x, p22y, 0, 0, color, 0, transform_or_null);
+                    this.submit(
+                        p11x, p11y, 0, 0, color,
+                        p12x, p12y, 0, 0, color,
+                        p22x, p22y, 0, 0, color, 0, transform_or_null);
                 }
 
                 p11x = p21x;
@@ -938,12 +937,17 @@ public class Render {
                 float p22x = xs[to-1] + con_to.u_side_x2;
                 float p22y = ys[to-1] + con_to.u_side_y2;
 
-                this.submit_triangle(p11x, p11y, p21x, p21y, p22x, p22y, color, 0, null);
-                this.submit_triangle(p11x, p11y, p12x, p12y, p22x, p22y, color, 0, null);
+                this.submit(p11x, p11y, 0, 0, color,
+                            p21x, p21y, 0, 0, color,
+                            p22x, p22y, 0, 0, color, 0, transform_or_null);
+                this.submit(p11x, p11y, 0, 0, color,
+                            p12x, p12y, 0, 0, color,
+                            p22x, p22y, 0, 0, color, 0, transform_or_null);
 
                 submit_connection_primitive(con_to, xs[to-1], ys[to-1], color, transform_or_null);
             }
         }
+
 
         public void submit_bezier_line(Buffers.PointArray points, Buffers.PointArray ders, float x1, float y1, float x2, float y2, float x3, float y3, float epsilon, float r, int color, Matrix3f transform_or_null)
         {
@@ -952,11 +956,22 @@ public class Render {
             Splines.sample_bezier(points, ders, x1, y1, x2, y2, x3, y3, 0, 10, epsilon);
             submit_derivative_connected_line(points.xs, points.ys, ders.xs, ders.ys, 0, points.length, null, null, r, color, transform_or_null);
         }
+
+        int beziers_point_sum = 0;
+        int beziers_sample_count = 0;
         public void submit_bezier_line(Line_Connection from, Line_Connection to, Buffers.PointArray points, Buffers.PointArray ders, float x1, float y1, float x2, float y2, float x3, float y3, float epsilon, float r, int color, Matrix3f transform_or_null)
         {
             points.resize(0);
             ders.resize(0);
             Splines.sample_bezier(points, ders, x1, y1, x2, y2, x3, y3, 0, 10, epsilon);
+            beziers_point_sum += points.length;
+            beziers_sample_count += 1;
+            if(beziers_sample_count == 10000)
+            {
+                System.out.println(STR."average points per bezier \{(double) beziers_point_sum / beziers_sample_count}");
+                beziers_point_sum = 0;
+                beziers_sample_count = 0;
+            }
             submit_derivative_connected_line(points.xs, points.ys, ders.xs, ders.ys, 0, points.length, from, to, r, color, transform_or_null);
         }
 
@@ -994,9 +1009,9 @@ public class Render {
                         Render.Bezier_Buffer.calculate_line_connection(curr_connection, pmx, pmy, p1x, p1y, p2x, p2y, r, do_rounded, sharp_cutoff_threshold);
                         if(it > 0) {
                             this.submit_connected_line(
-                                    prev_connection, curr_connection,
-                                    pmx, pmy,
-                                    p1x, p1y, color, null
+                                prev_connection, curr_connection,
+                                pmx, pmy,
+                                p1x, p1y, color, null
                             );
                         }
                     }
@@ -1004,12 +1019,12 @@ public class Render {
                         Render.Bezier_Buffer.calculate_line_connection(curr_connection, p0x, p0y, p1x, p1y, p2x, p2y, r, do_rounded, sharp_cutoff_threshold);
                         if(it > 0) {
                             this.submit_bezier_line(
-                                    prev_connection, curr_connection,
-                                    points, ders,
-                                    pmx, pmy,
-                                    p0x, p0y,
-                                    p1x, p1y,
-                                    bezier_epsilon, 2*r, color, null
+                                prev_connection, curr_connection,
+                                points, ders,
+                                pmx, pmy,
+                                p0x, p0y,
+                                p1x, p1y,
+                                bezier_epsilon, 2*r, color, null
                             );
                         }
                     }

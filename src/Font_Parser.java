@@ -8,6 +8,10 @@ import java.util.HashMap;
 
 import java.nio.file.Files;
 
+//Taken and expanded from the original C# implementation of the Sebastian Lague video "Coding adventure: font rendering"
+// which can be found here https://youtu.be/SO83KQuuZvg?si=J0353IHjLJ5TC4eO
+// and the source code here https://github.com/SebLague/Text-Rendering
+//Refer to https://developer.apple.com/fonts/TrueType-Reference-Manual/RM06/Chap6.html for specification
 public final class Font_Parser {
     public static final class Glyph
     {
@@ -17,9 +21,8 @@ public final class Font_Parser {
         public int[] contour_ends;
 
         public int unicode;
-        public int index;
-        public int advance_width;
-        public int left_side_bearing;
+        public int advance_width;     //how much to advance after this glyph
+        public int left_side_bearing; //space before the glyph
 
         public int min_x;
         public int max_x;
@@ -41,14 +44,32 @@ public final class Font_Parser {
         public String license;
         public String license_url;
 
-        public Glyph missing_glyph;
+        //all glyphs ordered by the order of the original file - NOT UNICODE
+        //first glyph is always the missing character glyph
+        public Glyph[] glyphs;
 
         public int units_per_em;
         public Instant created_time;
         public Instant modified_time;
 
-        //Maps unicode codepoints to glyphs.
-        public HashMap<Integer, Glyph> glyphs;
+        //bounding boxes for all glyphs
+        public int all_glyph_x_min;
+        public int all_glyph_y_min;
+        public int all_glyph_x_max;
+        public int all_glyph_y_max;
+
+        public int ascent;                  //Distance from baseline of highest ascender
+        public int descent;                 //Distance from baseline of lowest descender
+        public int line_gap;                //typographic line gap
+        public int advance_width_max;       //must be consistent with horizontal metrics
+        public int min_left_side_bearing;   //must be consistent with horizontal metrics
+        public int min_right_side_bearing;  //must be consistent with horizontal metrics
+        public int x_max_extent;            //max(lsb + (xMax-xMin))
+
+        //encode how to render the caret
+        public int caret_slope_x;
+        public int caret_slope_y; //always non zero
+        public int caret_offset;
     }
 
     public static final class Font_Log {
@@ -68,11 +89,8 @@ public final class Font_Parser {
 
     public static Font parse(ByteBuffer buffer, ArrayList<Font_Log> logs)
     {
-        //Taken from the original C# implementation TODO!!!
-        //Refer to https://developer.apple.com/fonts/TrueType-Reference-Manual/RM06/Chap6.html for specification
-
         Font out = new Font();
-        out.glyphs = new HashMap<Integer, Glyph>();
+        out.glyphs = new Glyph[0];
         Ref<Integer> offset = new Ref<Integer>(0);
 
         final class Table_Info {
@@ -192,7 +210,7 @@ public final class Font_Parser {
         int num_bytes_per_loc = 4;
         {
             offset.val = (int) table_infos.get("head").offset;
-            offset.val += 12; //skip version, fontRevision, magicNumber
+            offset.val += 12; //skip version, fontRevision, checkSumAdjustment
             long head_magic = read_u32(buffer, offset);
             if(head_magic != 0x5F0F3CF5)
                 font_log_into_list(logs, "warn", offset.val, "head", STR."Magic number is not correct \{Integer.toHexString((int) head_magic)}");
@@ -205,7 +223,11 @@ public final class Font_Parser {
             long SECONDS_BETWEEN_1904_AND_1970 = 2_082_844_800;
             long created_time = read_i64(buffer, offset);
             long modified_time = read_i64(buffer, offset);
-            offset.val += 14; //skip many things
+            int	all_glyph_x_min = read_i16(buffer, offset);
+            int	all_glyph_y_min = read_i16(buffer, offset);
+            int	all_glyph_x_max = read_i16(buffer, offset);
+            int	all_glyph_y_max = read_i16(buffer, offset);
+            offset.val += 6; //skip macStyle, lowestRecPPEM, fontDirectionHint
 
             // Number of bytes used by the offsets in the 'loca' table (for looking up glyph locations)
             int num_bytes_per_loc_signal = read_u16(buffer, offset);
@@ -213,12 +235,20 @@ public final class Font_Parser {
                 num_bytes_per_loc = 2;
             else if(num_bytes_per_loc_signal == 1)
                 num_bytes_per_loc = 4;
-            else
+            else {
                 font_log_into_list(logs, "error", offset.val, "head", STR."Strange number signaling bytes per location \{num_bytes_per_loc}. Using 4.");
+                num_bytes_per_loc_signal = 2;
+            }
 
             out.created_time = Instant.ofEpochSecond(created_time - SECONDS_BETWEEN_1904_AND_1970);
             out.modified_time = Instant.ofEpochSecond(modified_time - SECONDS_BETWEEN_1904_AND_1970);
             out.units_per_em = units_per_em;
+
+            out.all_glyph_x_min = all_glyph_x_min;
+            out.all_glyph_y_min = all_glyph_y_min;
+            out.all_glyph_x_max = all_glyph_x_max;
+            out.all_glyph_y_max = all_glyph_y_max;
+
             font_log_into_list(logs, "info", offset.val, "head", STR."Read units_per_em: \{out.units_per_em}");
             font_log_into_list(logs, "info", offset.val, "head", STR."Read created_time: \{out.created_time}");
             font_log_into_list(logs, "info", offset.val, "head", STR."Read modified_time: \{out.modified_time}");
@@ -424,12 +454,11 @@ public final class Font_Parser {
         }
 
         //Read all glyphs
-        Glyph_Map[] glyph_pairs0 = glyph_pairs.toArray(new Glyph_Map[0]);
-        Glyph[] glyphs = new Glyph[glyph_pairs0.length];
+        Glyph[] glyphs = new Glyph[glyph_pairs.size()];
         {
-            for (int i = 0; i < glyph_pairs0.length; i++)
+            for (int i = 0; i < glyph_pairs.size(); i++)
             {
-                Glyph_Map mapping = glyph_pairs0[i];
+                Glyph_Map mapping = glyph_pairs.get(i);
                 Glyph glyph = read_glyph_data(buffer, offset, glyph_locations, (int) mapping.glyph_index, (int) mapping.unicode_index, logs, 0);
                 glyph.unicode = (int) mapping.unicode_index;
                 glyphs[i] = glyph;
@@ -443,10 +472,30 @@ public final class Font_Parser {
 
             // Get number of metrics from the 'hhea' table
             offset.val = (int) table_infos.get("hhea").offset;
-            offset.val += 8; // unused: version, ascent, descent
-            int lineGap = read_i16(buffer, offset);
-            int advance_widthMax = read_i16(buffer, offset);
-            offset.val += 22; // unused: minleft_side_bearing, minRightSideBearing, xMaxExtent, caretSlope/Offset, reserved, metricDataFormat
+            int version = read_i32(buffer, offset);
+            if(version != 0x00010000)
+                font_log_into_list(logs, "error", offset.val, "hhea", STR."Bad version number. expected 0x00010000 got %0x%08X\{version}");
+            out.ascent = read_i16(buffer, offset);
+            out.descent = read_i16(buffer, offset);
+            out.line_gap = read_i16(buffer, offset);
+            out.advance_width_max = read_i16(buffer, offset);
+
+            out.min_left_side_bearing = read_i16(buffer, offset);
+            out.min_right_side_bearing = read_i16(buffer, offset);
+            out.x_max_extent = read_i16(buffer, offset);
+            out.caret_slope_y = read_i16(buffer, offset);
+            out.caret_slope_x = read_i16(buffer, offset);
+            out.caret_offset = read_i16(buffer, offset);
+
+            int reserved0 = read_i16(buffer, offset);
+            int reserved1 = read_i16(buffer, offset);
+            int reserved2 = read_i16(buffer, offset);
+            int reserved3 = read_i16(buffer, offset);
+            int metricDataFormat = read_i16(buffer, offset);
+            if(reserved0 != 0 || reserved1 != 0 || reserved2 != 0 || reserved3 != 0 || metricDataFormat != 0)
+                font_log_into_list(logs, "warn", offset.val, "hhea", STR."Unexpected values in the reserved fields:"
+                    + STR."reserved: [%0x%08X\{reserved0}, %0x%08X\{reserved1}, %0x%08X\{reserved2}, %0x%08X\{reserved3}] date_format:%0x%08X\{metricDataFormat}, ");
+
             int metrics_count = read_i16(buffer, offset);
 
             // Get the advance width and left_side_bearing metrics from the 'hmtx' table
@@ -475,28 +524,20 @@ public final class Font_Parser {
             }
 
             // Apply
-            for(Glyph glyph : glyphs)
+            for(int i = 0; i < glyphs.length; i++)
             {
-                glyph.advance_width = glyphs_advance[glyph.index];
-                glyph.left_side_bearing = glyphs_left[glyph.index];
+                glyphs[i].advance_width = glyphs_advance[i];
+                glyphs[i].left_side_bearing = glyphs_left[i];
             }
         }
 
-        for(Glyph glyph : glyphs)
-        {
-            out.glyphs.put(glyph.unicode, glyph);
-
-            if(glyph.index == 0)
-                out.missing_glyph = glyph;
-        }
-
+        out.glyphs = glyphs;
         return out;
     }
 
     public static Glyph read_glyph_data(ByteBuffer buffer, Ref<Integer> offset, long[] glyph_locations, int glyph_index, int unicode_index, ArrayList<Font_Log> logs, int recursion_depth)
     {
         Glyph glyph = new Glyph();
-        glyph.index = glyph_index;
         if(recursion_depth > 200)
         {
             font_log_into_list(logs, "error", offset.val, "glyf", STR."Recursive compound glyph on inde \{glyph_index} and unicode \{Integer.toHexString(unicode_index)} too deep! Recursion steps \{recursion_depth}");
@@ -839,7 +880,7 @@ public final class Font_Parser {
 
     public static void font_log_into_list(ArrayList<Font_Log> logs, String category, long offset, String table, String error)
     {
-        System.out.println(STR."FONT_PARSE \{category}: [\{table}] \{error} offset \{Long.toHexString(offset)}");
+//        System.out.println(STR."FONT_PARSE \{category}: [\{table}] \{error} offset \{Long.toHexString(offset)}");
         if(logs != null)
         {
             Font_Log log = new Font_Log();
