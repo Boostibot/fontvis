@@ -3,9 +3,12 @@ import org.joml.Matrix4f;
 import org.joml.Vector3f;
 import org.joml.Vector4f;
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.system.MemoryUtil;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.FloatBuffer;
+import java.nio.IntBuffer;
 import java.util.Arrays;
 
 import static java.lang.Math.abs;
@@ -37,40 +40,153 @@ public class Render {
         //2 floats uv
         //1 uint for color
         //1 uint for flags
-        public ByteBuffer buffer;
+        public float[] buffer = new float[0];
 
         public int length;
         public int capacity;
         public boolean grows = true;
 
-        public static int BYTES_PER_VERTEX = 4*Float.BYTES + 2*Integer.BYTES;
-        public static int VERTICES_PER_SEGMENT = 3;
-        public static int BYTES_PER_SEGMENT = VERTICES_PER_SEGMENT*BYTES_PER_VERTEX;
+        public static final int BYTES_PER_VERTEX = 4*Float.BYTES + 2*Integer.BYTES;
+        public static final int VERTICES_PER_SEGMENT = 3;
+        public static final int BYTES_PER_SEGMENT = VERTICES_PER_SEGMENT*BYTES_PER_VERTEX;
+        public static final int FLOATS_PER_VERTEX = BYTES_PER_VERTEX / Float.BYTES;
+        public static final int FLOATS_PER_SEGMENT = BYTES_PER_SEGMENT / Float.BYTES;
 
         //default rendering mode: solid triangle with points p1, p2, p3
-        public static int FLAG_BEZIER = 1; //the triangle is interpreted as quadratic bezier curve where p1, p3 are endpoints and p2 is control point
-        public static int FLAG_CIRCLE = 2; //the triangle is interpreted as circle segment where p2 is the center, and p1, p2 mark the segment sides. The radius is 1 in uv space.
-        public static int FLAG_INVERSE = 4; //the triangle shape is filled inside out. When combined with rendering triangles, makes the triangle entirely invisible!
-        public static int FLAG_OKLAB = 8; //vertex colors are interpolated in the OKLAB colorspace instead of linear colorspace.
+        public static final int FLAG_BEZIER = 1; //the triangle is interpreted as quadratic bezier curve where p1, p3 are endpoints and p2 is control point
+        public static final int FLAG_CIRCLE = 2; //the triangle is interpreted as circle segment where p2 is the center, and p1, p2 mark the segment sides. The radius is 1 in uv space.
+        public static final int FLAG_INVERSE = 4; //the triangle shape is filled inside out. When combined with rendering triangles, makes the triangle entirely invisible!
+        public static final int FLAG_OKLAB = 8; //vertex colors are interpolated in the OKLAB colorspace instead of linear colorspace.
 
-        public Bezier_Buffer(int max_cpu_size)
+        public Bezier_Buffer() {}
+
+        public Bezier_Buffer(int max_cpu_size, boolean grows)
         {
             this.capacity = max_cpu_size/BYTES_PER_SEGMENT;
-            this.buffer = ByteBuffer.allocate(this.capacity*BYTES_PER_SEGMENT);
-            this.buffer.order(ByteOrder.nativeOrder());
+            if(max_cpu_size > 0)
+                this.buffer = new float[this.capacity*FLOATS_PER_SEGMENT];
+            this.grows = grows;
+        }
+
+        public void free_all()
+        {
+            buffer = null;
+            length = 0;
+            capacity = 0;
+            grows = true;
+        }
+
+        void reset()
+        {
+            length = 0;
         }
 
         public void reserve(int to_size)
         {
-            if(grows == false)
-                assert to_size <= capacity;
-            else if(to_size > capacity)
+            if(to_size > capacity)
             {
-                capacity = to_size*3/2 + 8;
-                buffer = ByteBuffer.wrap(Arrays.copyOf(buffer.array(), BYTES_PER_SEGMENT*capacity));
-                buffer.order(ByteOrder.nativeOrder());
+                assert grows;
+                capacity = capacity*3/2 + 8;
+                if(capacity < to_size)
+                    capacity = to_size;
+
+                buffer = Arrays.copyOf(buffer, capacity*FLOATS_PER_SEGMENT);
             }
             assert buffer != null;
+        }
+
+        public void copy_to(Bezier_Buffer into, int into_offset, int from, int to)
+        {
+            System.arraycopy(this.buffer, from*FLOATS_PER_SEGMENT, into.buffer, into_offset*FLOATS_PER_SEGMENT, (to - from)*FLOATS_PER_SEGMENT);
+        }
+
+        public void submit(float[] vertex_data, int float_from, int float_to)
+        {
+            int segments = (float_to - float_from)/FLOATS_PER_SEGMENT;
+            reserve(length + segments);
+            System.arraycopy(vertex_data, float_from, buffer, length*FLOATS_PER_SEGMENT, segments*FLOATS_PER_SEGMENT);
+            length += segments;
+        }
+
+        public void submit(Bezier_Buffer vertex_data, int from, int to)
+        {
+            reserve(length + (to - from));
+            System.arraycopy(vertex_data.buffer, from*FLOATS_PER_SEGMENT, buffer, length*FLOATS_PER_SEGMENT, (to - from)*FLOATS_PER_SEGMENT);
+            length += (to - from);
+        }
+
+        public void submit(Bezier_Buffer vertex_data)
+        {
+            submit(vertex_data, 0, vertex_data.length);
+        }
+
+        public void submit(Bezier_Buffer vertex_data, int from, int to, Matrix3f transform, boolean recolor, int color)
+        {
+            int before = length;
+            submit(vertex_data, from, to);
+            transform(before, length, transform, recolor, color);
+        }
+
+        public void submit(Bezier_Buffer vertex_data, Matrix3f transform, boolean recolor, int color)
+        {
+            submit(vertex_data, 0, vertex_data.length, transform, recolor, color);
+        }
+
+        public void transform(int from, int to, Matrix3f transform, boolean recolor, int color)
+        {
+            int start = from*FLOATS_PER_SEGMENT;
+            int end = to*FLOATS_PER_SEGMENT;
+            for(int i = start; i < end; i += FLOATS_PER_SEGMENT)
+            {
+                if(transform != null)
+                {
+                    float x1 = buffer[i + 0*FLOATS_PER_VERTEX + 0];
+                    float y1 = buffer[i + 0*FLOATS_PER_VERTEX + 1];
+
+                    float x2 = buffer[i + 1*FLOATS_PER_VERTEX + 0];
+                    float y2 = buffer[i + 1*FLOATS_PER_VERTEX + 1];
+
+                    float x3 = buffer[i + 2*FLOATS_PER_VERTEX + 0];
+                    float y3 = buffer[i + 2*FLOATS_PER_VERTEX + 1];
+
+                    float x1_ = x1;
+                    x1 = transform.m00*x1_ + transform.m10*y1 + transform.m20;
+                    y1 = transform.m01*x1_ + transform.m11*y1 + transform.m21;
+
+                    float x2_ = x2;
+                    x2 = transform.m00*x2_ + transform.m10*y2 + transform.m20;
+                    y2 = transform.m01*x2_ + transform.m11*y2 + transform.m21;
+
+                    float x3_ = x3;
+                    x3 = transform.m00*x3_ + transform.m10*y3 + transform.m20;
+                    y3 = transform.m01*x3_ + transform.m11*y3 + transform.m21;
+
+                    buffer[i + 0*FLOATS_PER_VERTEX + 0] = x1;
+                    buffer[i + 0*FLOATS_PER_VERTEX + 1] = y1;
+
+                    buffer[i + 1*FLOATS_PER_VERTEX + 0] = x2;
+                    buffer[i + 1*FLOATS_PER_VERTEX + 1] = y2;
+
+                    buffer[i + 2*FLOATS_PER_VERTEX + 0] = x3;
+                    buffer[i + 2*FLOATS_PER_VERTEX + 1] = y3;
+                }
+
+                if(recolor) {
+                    buffer[i + 0*FLOATS_PER_VERTEX + 4] = Float.intBitsToFloat(color);
+                    buffer[i + 1*FLOATS_PER_VERTEX + 4] = Float.intBitsToFloat(color);
+                    buffer[i + 2*FLOATS_PER_VERTEX + 4] = Float.intBitsToFloat(color);
+                }
+            }
+        }
+
+        public void recolor(int from, int to, int color)
+        {
+            transform(from, to, null, true, color);
+        }
+
+        public void transform(int from, int to, Matrix3f transform)
+        {
+            transform(from, to, transform, false, 0);
         }
 
         public void submit(float x1, float y1, float u1, float v1, int color1,
@@ -78,7 +194,7 @@ public class Render {
                            float x3, float y3, float u3, float v3, int color3,
                            int flags, Matrix3f transform_or_null)
         {
-            //If transfomr is passed in apply it to all vertices (but not uvs!)
+            //If transform is passed in apply it to all vertices (but not uvs!)
             if(transform_or_null != null)
             {
                 float x1_ = x1;
@@ -95,27 +211,26 @@ public class Render {
             }
 
             reserve(length + 1);
+            buffer[length*FLOATS_PER_SEGMENT + FLOATS_PER_VERTEX*0 + 0] = x1;
+            buffer[length*FLOATS_PER_SEGMENT + FLOATS_PER_VERTEX*0 + 1] = y1;
+            buffer[length*FLOATS_PER_SEGMENT + FLOATS_PER_VERTEX*0 + 2] = u1;
+            buffer[length*FLOATS_PER_SEGMENT + FLOATS_PER_VERTEX*0 + 3] = v1;
+            buffer[length*FLOATS_PER_SEGMENT + FLOATS_PER_VERTEX*0 + 4] = Float.intBitsToFloat(color1);
+            buffer[length*FLOATS_PER_SEGMENT + FLOATS_PER_VERTEX*0 + 5] = Float.intBitsToFloat(flags);;
 
-            buffer.putFloat(x1);
-            buffer.putFloat(y1);
-            buffer.putFloat(u1);
-            buffer.putFloat(v1);
-            buffer.putInt(color1);
-            buffer.putInt(flags);
+            buffer[length*FLOATS_PER_SEGMENT + FLOATS_PER_VERTEX*1 + 0] = x2;
+            buffer[length*FLOATS_PER_SEGMENT + FLOATS_PER_VERTEX*1 + 1] = y2;
+            buffer[length*FLOATS_PER_SEGMENT + FLOATS_PER_VERTEX*1 + 2] = u2;
+            buffer[length*FLOATS_PER_SEGMENT + FLOATS_PER_VERTEX*1 + 3] = v2;
+            buffer[length*FLOATS_PER_SEGMENT + FLOATS_PER_VERTEX*1 + 4] = Float.intBitsToFloat(color2);
+            buffer[length*FLOATS_PER_SEGMENT + FLOATS_PER_VERTEX*1 + 5] = Float.intBitsToFloat(flags);;
 
-            buffer.putFloat(x2);
-            buffer.putFloat(y2);
-            buffer.putFloat(u2);
-            buffer.putFloat(v2);
-            buffer.putInt(color2);
-            buffer.putInt(flags);
-
-            buffer.putFloat(x3);
-            buffer.putFloat(y3);
-            buffer.putFloat(u3);
-            buffer.putFloat(v3);
-            buffer.putInt(color3);
-            buffer.putInt(flags);
+            buffer[length*FLOATS_PER_SEGMENT + FLOATS_PER_VERTEX*2 + 0] = x3;
+            buffer[length*FLOATS_PER_SEGMENT + FLOATS_PER_VERTEX*2 + 1] = y3;
+            buffer[length*FLOATS_PER_SEGMENT + FLOATS_PER_VERTEX*2 + 2] = u3;
+            buffer[length*FLOATS_PER_SEGMENT + FLOATS_PER_VERTEX*2 + 3] = v3;
+            buffer[length*FLOATS_PER_SEGMENT + FLOATS_PER_VERTEX*2 + 4] = Float.intBitsToFloat(color3);
+            buffer[length*FLOATS_PER_SEGMENT + FLOATS_PER_VERTEX*2 + 5] = Float.intBitsToFloat(flags);;
             length += 1;
         }
 
@@ -564,13 +679,10 @@ public class Render {
 
                 //The position of sharp connection point on the inside of the bend
                 // is shared among all connection styles
-//                float beta = Math.abs(r/h_dot_pu);
                 float beta = r/h_dot_pu;
                 if(Float.isInfinite(beta))
                     beta = 0;
 
-//                if(v_dot_pu < 0)
-//                    beta = -beta;
                 float Ax = beta*hx;
                 float Ay = beta*hy;
 
@@ -695,40 +807,6 @@ public class Render {
                     connection.has_circle = false;
                 }
             }
-
-            //if is concave flip on each side ***1 and ***2.
-            //This ensures that when doing normal oriented polygon contour,
-            // will always join up right
-            float twice_area2 = ux*vy - uy*vx;
-            if(twice_area2 > 0 && false)
-            {
-                float old_u_side_x1 = connection.u_side_x1;
-                float old_u_side_y1 = connection.u_side_y1;
-                float old_u_side_x2 = connection.u_side_x2;
-                float old_u_side_y2 = connection.u_side_y2;
-
-                float old_v_side_x1 = connection.v_side_x1;
-                float old_v_side_y1 = connection.v_side_y1;
-                float old_v_side_x2 = connection.v_side_x2;
-                float old_v_side_y2 = connection.v_side_y2;
-
-                connection.u_side_x1 = old_u_side_x2;
-                connection.u_side_y1 = old_u_side_y2;
-                connection.u_side_x2 = old_u_side_x1;
-                connection.u_side_y2 = old_u_side_y1;
-
-                connection.v_side_x1 = old_v_side_x2;
-                connection.v_side_y1 = old_v_side_y2;
-                connection.v_side_x2 = old_v_side_x1;
-                connection.v_side_y2 = old_v_side_y1;
-            }
-
-            return connection;
-        }
-
-        public static Line_Connection flip_line_connection(Line_Connection connection, boolean convex)
-        {
-            //A is always up
             return connection;
         }
 
@@ -806,45 +884,6 @@ public class Render {
             );
         }
 
-        public void submit_derivative_connected_line(float[] xs, float[] ys, float[] derx, float[] dery, int from, int to, float width, int color, Matrix3f transform_or_null)
-        {
-            float r = width/2;
-            float p11x = 0;
-            float p11y = 0;
-            float p12x = 0;
-            float p12y = 0;
-
-            float old_der_x = 1;
-            float old_der_y = 0;
-            for(int i = from; i < to; i++)
-            {
-                float mag = (float) Math.sqrt(derx[i]*derx[i] + dery[i]*dery[i]);
-                float der_x = derx[i]/mag;
-                float der_y = dery[i]/mag;
-                if(mag == 0) {
-                    der_x = old_der_x;
-                    der_y = old_der_y;
-                }
-
-                float p21x = xs[i] + der_y*r;
-                float p21y = ys[i] - der_x*r;
-                float p22x = xs[i] - der_y*r;
-                float p22y = ys[i] + der_x*r;
-
-                if(i > 0) {
-                    this.submit_triangle(p11x, p11y, p21x, p21y, p22x, p22y, color, 0, null);
-                    this.submit_triangle(p11x, p11y, p12x, p12y, p22x, p22y, color, 0, null);
-                }
-
-                p11x = p21x;
-                p11y = p21y;
-                p12x = p22x;
-                p12y = p22y;
-                old_der_x = der_x;
-                old_der_y = der_y;
-            }
-        }
-
         public void submit_derivative_connected_line(
             float[] xs, float[] ys, float[] derx, float[] dery, int from, int to, 
             Line_Connection con_from, Line_Connection con_to, float width, int color, Matrix3f transform_or_null)
@@ -906,22 +945,92 @@ public class Render {
             }
         }
 
-        public void submit_bezier_line(Triangulate.PointArray points, Triangulate.PointArray ders, float x1, float y1, float x2, float y2, float x3, float y3, float epsilon, float r, int color, Matrix3f transform_or_null)
+        public void submit_bezier_line(Buffers.PointArray points, Buffers.PointArray ders, float x1, float y1, float x2, float y2, float x3, float y3, float epsilon, float r, int color, Matrix3f transform_or_null)
         {
             points.resize(0);
             ders.resize(0);
-            Main.sample_bezier(points, ders, x1, y1, x2, y2, x3, y3, 0, 10, epsilon);
-            submit_derivative_connected_line(points.xs, points.ys, ders.xs, ders.ys, 0, points.length, r, color, transform_or_null);
+            Splines.sample_bezier(points, ders, x1, y1, x2, y2, x3, y3, 0, 10, epsilon);
+            submit_derivative_connected_line(points.xs, points.ys, ders.xs, ders.ys, 0, points.length, null, null, r, color, transform_or_null);
         }
-        public void submit_bezier_line(Line_Connection from, Line_Connection to, Triangulate.PointArray points, Triangulate.PointArray ders, float x1, float y1, float x2, float y2, float x3, float y3, float epsilon, float r, int color, Matrix3f transform_or_null)
+        public void submit_bezier_line(Line_Connection from, Line_Connection to, Buffers.PointArray points, Buffers.PointArray ders, float x1, float y1, float x2, float y2, float x3, float y3, float epsilon, float r, int color, Matrix3f transform_or_null)
         {
             points.resize(0);
             ders.resize(0);
-            Main.sample_bezier(points, ders, x1, y1, x2, y2, x3, y3, 0, 10, epsilon);
+            Splines.sample_bezier(points, ders, x1, y1, x2, y2, x3, y3, 0, 10, epsilon);
             submit_derivative_connected_line(points.xs, points.ys, ders.xs, ders.ys, 0, points.length, from, to, r, color, transform_or_null);
         }
 
-        public void submit_indexed_triangles(float[] xs, float[] ys, Triangulate.IndexBuffer indices, int color, int flags, Matrix3f transform_or_null)
+        public void submit_bezier_countour(Buffers.PointArray points, Buffers.PointArray ders, Line_Connection[] connections, float[] xs, float[] ys, Buffers.IndexBuffer shape, float width, float sharp_cutoff_threshold, float bezier_epsilon, int color, Matrix3f transform_or_null)
+        {
+            //if length is 2 its a single vertex
+            //if length is >= 4 its at least a line...
+            float r = width/2;
+            boolean do_rounded = sharp_cutoff_threshold < 0;
+            if(shape.length >= 4)
+            {
+                float pmx = xs[shape.at(shape.length - 3)];
+                float pmy = ys[shape.at(shape.length - 3)];
+                float p0x = xs[shape.at(shape.length - 2)];
+                float p0y = ys[shape.at(shape.length - 2)];
+                float p1x = xs[shape.at(shape.length - 1)];
+                float p1y = ys[shape.at(shape.length - 1)];
+                for(int it = 0; it <= shape.length; it += 2)
+                {
+                    int i = it;
+                    if(i >= shape.length)
+                        i = 0;
+
+                    int vi = shape.at(i);
+                    int vn = shape.at(i+1);
+                    float p2x = xs[vi];
+                    float p2y = ys[vi];
+                    float p3x = xs[vn];
+                    float p3y = ys[vn];
+
+                    Render.Bezier_Buffer.Line_Connection prev_connection = connections[(it/2+1) & 1];
+                    Render.Bezier_Buffer.Line_Connection curr_connection = connections[(it/2+0) & 1];
+
+                    if((p0x == p1x && p0y == p1y)) {
+                        Render.Bezier_Buffer.calculate_line_connection(curr_connection, pmx, pmy, p1x, p1y, p2x, p2y, r, do_rounded, sharp_cutoff_threshold);
+                        if(it > 0) {
+                            this.submit_connected_line(
+                                    prev_connection, curr_connection,
+                                    pmx, pmy,
+                                    p1x, p1y, color, null
+                            );
+                        }
+                    }
+                    else {
+                        Render.Bezier_Buffer.calculate_line_connection(curr_connection, p0x, p0y, p1x, p1y, p2x, p2y, r, do_rounded, sharp_cutoff_threshold);
+                        if(it > 0) {
+                            this.submit_bezier_line(
+                                    prev_connection, curr_connection,
+                                    points, ders,
+                                    pmx, pmy,
+                                    p0x, p0y,
+                                    p1x, p1y,
+                                    bezier_epsilon, 2*r, color, null
+                            );
+                        }
+                    }
+
+                    pmx = p1x;
+                    pmy = p1y;
+                    p0x = p2x;
+                    p0y = p2y;
+                    p1x = p3x;
+                    p1y = p3y;
+                }
+            }
+            else if(shape.length >= 2)
+            {
+                float x = xs[shape.at(1)];
+                float y = ys[shape.at(1)];
+                this.submit_circle(x, y, r, color, transform_or_null);
+            }
+        }
+
+        public void submit_indexed_triangles(float[] xs, float[] ys, Buffers.IndexBuffer indices, int color, int flags, Matrix3f transform_or_null)
         {
             for(int i = 0; i < indices.length; i += 3)
             {
@@ -933,33 +1042,6 @@ public class Render {
             }
         }
 
-        static Matrix3f SUBMIT_TEXT_COUBNTOUR_TEMP_MATRIX = new Matrix3f();
-        public void submit_text_countour(Font_Parser.Font font, String text, float scale, float width, float spacing_flat, float spacing_boost, int color, Matrix3f transform_or_null)
-        {
-            int i = 0;
-            SUBMIT_TEXT_COUBNTOUR_TEMP_MATRIX.identity();
-            int text_position = 0;
-            for(int c : text.codePoints().toArray()){
-                Font_Parser.Glyph glyph = font.glyphs.getOrDefault(c, font.missing_glyph);
-                if(glyph == font.missing_glyph)
-                    System.err.println(STR."Couldnt render unicode character '\{Character.toChars(c)}' using not found glyph");
-
-//                Font_Parser.Glyph glyph = font.missing_glyph;
-                SUBMIT_TEXT_COUBNTOUR_TEMP_MATRIX.m20 = i*spacing_flat + text_position*scale*spacing_boost;
-                if(transform_or_null != null)
-                    SUBMIT_TEXT_COUBNTOUR_TEMP_MATRIX.mulLocal(transform_or_null);
-
-//                submit_glyph_contour(glyph, scale, width, color, true, SUBMIT_TEXT_COUBNTOUR_TEMP_MATRIX);
-                text_position += glyph.advance_width;
-                i += 1;
-            }
-        }
-
-        void reset()
-        {
-            buffer.clear();
-            length = 0;
-        }
     }
 
     public static final class Quadratic_Bezier_Render {
@@ -968,16 +1050,19 @@ public class Render {
         public int shader;
         public int capacity;
         public float aa_threshold = 0.7f;
-        public ByteBuffer temp_buffer;
+        public FloatBuffer temp_buffer;
 
         public static int VERTICES_PER_SEGMENT = Bezier_Buffer.VERTICES_PER_SEGMENT;
         public static int BYTES_PER_SEGMENT = Bezier_Buffer.BYTES_PER_SEGMENT;
         public static int BYTES_PER_VERTEX = Bezier_Buffer.BYTES_PER_VERTEX;
+        public static int FLOATS_PER_VERTEX = Bezier_Buffer.FLOATS_PER_VERTEX;
+        public static int FLOATS_PER_SEGMENT = Bezier_Buffer.FLOATS_PER_SEGMENT;
 
         public Quadratic_Bezier_Render(int max_gpu_size)
         {
             capacity = max_gpu_size/BYTES_PER_SEGMENT;
-            temp_buffer = ByteBuffer.allocateDirect(capacity*BYTES_PER_SEGMENT);
+            temp_buffer = MemoryUtil.memAllocFloat(capacity*FLOATS_PER_SEGMENT);
+
             //init gpu buffers
             {
                 VAO = glGenVertexArrays();
@@ -1165,7 +1250,7 @@ public class Render {
             Matrix4f view = view_or_null == null ? MAT4_ID : view_or_null;
 
             temp_buffer.clear();
-
+            temp_buffer.limit(capacity*FLOATS_PER_SEGMENT);
             assert capacity > 0;
             try (MemoryStack stack = stackPush()) {
                 //Set once global state
@@ -1188,11 +1273,12 @@ public class Render {
                     int len = min(capacity - filled, batch.length - skip_len);
                     if (len != 0)
                     {
-                        temp_buffer.put(filled*BYTES_PER_SEGMENT, batch.buffer.array(), skip_len*BYTES_PER_SEGMENT, len*BYTES_PER_SEGMENT);
+                        temp_buffer.put(filled*FLOATS_PER_SEGMENT, batch.buffer, skip_len*FLOATS_PER_SEGMENT, len*FLOATS_PER_SEGMENT);
                         filled += len;
                     }
 
                     assert filled <= capacity;
+                    temp_buffer.limit(filled*FLOATS_PER_SEGMENT);
 
                     //if full or last batch flush to the screen
                     if (filled == capacity || batch_i == batches.length - 1) {

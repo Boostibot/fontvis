@@ -42,13 +42,6 @@ public final class Splines {
             this.y3 = y3;
         }
     }
-    public static float bezier_x(Quad_Bezier b, float t) { return bezier(b.x1, b.x2, b.x3, t); }
-    public static float bezier_y(Quad_Bezier b, float t) { return bezier(b.y1, b.y2, b.y3, t); }
-    public static float bezier_derivative_x(Quad_Bezier b, float t) { return bezier_derivative(b.x1, b.x2, b.x3, t); }
-    public static float bezier_derivative_y(Quad_Bezier b, float t) { return bezier_derivative(b.y1, b.y2, b.y3, t); }
-    public static float bezier_second_derivative_x(Quad_Bezier b) { return bezier_second_derivative(b.x1, b.x2, b.x3); }
-    public static float bezier_second_derivative_y(Quad_Bezier b) { return bezier_second_derivative(b.y1, b.y2, b.y3); }
-
     public static float bezier_curvature(float x1, float y1, float x2, float y2, float x3, float y3, float t)
     {
         //see: https://pomax.github.io/bezierinfo/#curvature
@@ -247,8 +240,8 @@ public final class Splines {
         class H {
             public static double bezier_derivative_magnitude(Quad_Bezier b, double t)
             {
-                double dx = bezier_derivative_x(b, (float) t);
-                double dy = bezier_derivative_y(b, (float) t);
+                double dx = bezier_derivative(b.x1, b.x2, b.x3, (float) t);
+                double dy = bezier_derivative(b.y1, b.y2, b.y3, (float) t);
                 return Math.hypot(dx, dy);
             }
         }
@@ -450,6 +443,72 @@ public final class Splines {
         s2.y3 = y3;
     }
 
+    static void sample_bezier(Buffers.PointArray points, Buffers.PointArray derivatives, float x1, float y1, float x2, float y2, float x3, float y3, int min_times_log2, int max_times_log2, float min_error)
+    {
+        class H {
+            static float sqr_dist(float x1, float y1, float x2, float y2) {
+                float dx = x1 - x2;
+                float dy = y1 - y2;
+                return dx*dx + dy*dy;
+            }
+
+            static void sample_recursive(Buffers.PointArray points, Buffers.PointArray derivatives, float x1, float y1, float x2, float y2, float x3, float y3, int min_times_log2, int max_times_log2, float sqr_min_error, int depth)
+            {
+                if(depth > max_times_log2)
+                    return;
+
+                float area = Triangulate.cross_product_z(x2, y2, x1, y1, x3, y3);
+                float sqr_base = sqr_dist(x1, y1, x3, y3);
+                if(area*area <= sqr_min_error*sqr_base && depth >= min_times_log2)
+                    return;
+
+                float x_mid = Splines.bezier(x1, x2, x3, 0.5f);
+                float y_mid = Splines.bezier(y1, y2, y3, 0.5f);
+
+                float lo_x2 = (x1 + x2)/2;
+                float lo_y2 = (y1 + y2)/2;
+                sample_recursive(points, derivatives, x1, y1, lo_x2, lo_y2, x_mid, y_mid, min_times_log2, max_times_log2, sqr_min_error, depth + 1);
+
+                points.push(x_mid, y_mid);
+                if(derivatives != null)
+                {
+                    derivatives.push(
+                            Splines.bezier_derivative(x1, x2, x3, 0.5f),
+                            Splines.bezier_derivative(y1, y2, y3, 0.5f)
+                    );
+                }
+
+                float hi_x2 = (x2 + x3)/2;
+                float hi_y2 = (y2 + y3)/2;
+                sample_recursive(points, derivatives, x_mid, y_mid, hi_x2, hi_y2, x3, y3, min_times_log2, max_times_log2, sqr_min_error, depth + 1);
+            }
+        }
+
+        float sqr_min_error = min_error*min_error;
+        //detect problematic curves and subdivide them at least once
+        if(min_times_log2 == 0)
+            if(H.sqr_dist(x1, y1, x3, y3) == 0 && H.sqr_dist(x1, y1, x2, y2) != 0)
+                min_times_log2 = 1;
+
+        points.push(x1, y1);
+        if(derivatives != null)
+            derivatives.push(
+                    Splines.bezier_derivative(x1, x2, x3, 0),
+                    Splines.bezier_derivative(y1, y2, y3, 0)
+            );
+        H.sample_recursive(points, derivatives, x1, y1, x2, y2, x3, y3, min_times_log2, max_times_log2, sqr_min_error, 0);
+        points.push(x3, y3);
+        if(derivatives != null)
+            derivatives.push(
+                    Splines.bezier_derivative(x1, x2, x3, 1),
+                    Splines.bezier_derivative(y1, y2, y3, 1)
+            );
+    }
+
+    static void sample_bezier(Buffers.PointArray points, Buffers.PointArray derivatives, float x1, float y1, float x2, float y2, float x3, float y3, float min_error)
+    {
+        sample_bezier(points, derivatives, x1, y1, x2, y2, x3, y3, 0, 16, min_error);
+    }
 
     public static void test_some_splines()
     {

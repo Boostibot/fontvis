@@ -14,23 +14,20 @@ import org.lwjgl.opengl.*;
 import org.lwjgl.system.MemoryStack;
 
 //tomorrow:
-// connect lines
-// submit outline
-// line cache as a part of glyph
-// text layouting
+// fix that one bug
 // basic typing
 // instructions on screen (seperate buffer)
 // background (line) shader
 
 public class Main {
-    private int width = 1200;
-    private int height = 800;
-    private int mouseX = 0;
-    private int mouseY = 0;
-    private boolean panning = false;
-    private float zoom_val = 1;
-    private float rotation = 0;
-    private float dt = 0;
+    int window_width = 1200;
+    int window_height = 800;
+    int mouseX = 0;
+    int mouseY = 0;
+    boolean panning = false;
+    float zoom_val = 1;
+    float rotation = 0;
+    float dt = 0;
 
     static float ZOOM_SPEED_KEY = 2;
     static float ZOOM_SPEED_SCROLL = 2;
@@ -38,56 +35,344 @@ public class Main {
     static float SPRINT_CAMERA_SPEED = 10;
     static float ROTATE_SPEED = 1;
 
-    private final Quaternionf orientation = new Quaternionf();
-    private final Vector3f position = new Vector3f(0, 0, 0);
-    private boolean[] keyDown = new boolean[GLFW_KEY_LAST + 1];
+    final Vector3f position = new Vector3f(0, 0, 0);
+    boolean[] keyDown = new boolean[GLFW_KEY_LAST + 1];
 
     public static final int KB = 1024;
     public static final int MB = 1024*1024;
     public static final int GB = 1024*1024*1024;
 
-    /*
-    Triangulate.PointArray normalized = new Triangulate.PointArray();
-    Triangulate.bezier_normalize_y(normalized, xs, ys, Triangulate.IndexBuffer.til(xs.length));
+    Render.Quadratic_Bezier_Render render;
+    Render.Bezier_Buffer ui_buffer = new Render.Bezier_Buffer(64*MB, false);
+    Render.Bezier_Buffer glyph_buffer = new Render.Bezier_Buffer(4*MB, false);
+    Outline_Cache outline_cache = new Outline_Cache();
 
-    for(int yi = 0; yi < resy; yi++)
-        for(int xi = 0; xi < resx; xi++)
+    ArrayList<Font> fonts = new ArrayList<>();
+
+    public static final String on_screen_instructions = """
+            arrow keys to move
+            hold mouse to pan
+            O,P or scroll to zoom
+            Q,E to roll camera.
+            """;
+
+    public static final class Text_Style
+    {
+        public static final int FLAG_RAINBOW_FILL = 1;
+        public static final int FLAG_RAINBOW_OUTLINE = 2;
+        public static final int FLAG_SHOW_SKELETON = 4;
+        public static final int FLAG_SHOW_TRIANGLES = 8;
+        public static final int FLAG_DANCING = 16;
+
+        public short font_index = 0;
+        public short font_gen;
+
+        public float size = 0.05f;
+        public int color = 0x00;
+        public float outline_width;
+        public float outline_sharpness = 0.7f;
+        public int outline_color;
+        public float spacing_x;
+        public float spacing_y;
+        public float spacing_scale_x = 1;
+        public float spacing_scale_y = 1;
+
+        public int flags;
+        public Matrix3f transform;
+    }
+
+    public static final Text_Style DEF_TEXT_STYLE = new Text_Style();
+    public static final Text_Style UI_TEXT_STYLE = new Text_Style();
+
+
+    public static int hash(int x) {
+        x = ((x >>> 16) ^ x) * 0x45d9f3b;
+        x = ((x >>> 16) ^ x) * 0x45d9f3b;
+        x = (x >>> 16) ^ x;
+        return x;
+    }
+    public static long hash(long x) {
+        x = (x ^ (x >>> 30)) * 0xbf58476d1ce4e5b9L;
+        x = (x ^ (x >>> 27)) * 0x94d049bb133111ebL;
+        x = x ^ (x >>> 31);
+        return x;
+    }
+
+    public static class Outline_Cache_Key
+    {
+        public int font;
+        public int unicode;
+        public float width;
+        public float sharpness;
+        public float epsilon;
+
+        public Outline_Cache_Key() {}
+        public void set(int font, int unicode, float width, float sharpness, float epsilon)
         {
-            float x = (float) xi/resx*scale_x;
-            float y = (float) yi/resy*scale_y;
-
-            boolean inside = Triangulate.is_inside_normalized_bezier(
-                    Triangulate.POINT_IN_SHAPE_BOUNDARY_DONT_CARE,
-                    normalized.xs, normalized.ys, 0, normalized.length, x, y);
-
-            if(is_solid)
-                bitmap[xi + yi*resx] = bitmap[xi + yi*resx] || inside;
-            else
-                bitmap[xi + yi*resx] = bitmap[xi + yi*resx] && !inside;
+            this.font = font;
+            this.unicode = unicode;
+            this.width = width;
+            this.sharpness = sharpness;
+            this.epsilon = epsilon;
         }
-     */
+
+        @Override
+        public boolean equals(Object o) {
+            if (o == null || getClass() != o.getClass())
+                return false;
+
+            Outline_Cache_Key that = (Outline_Cache_Key) o;
+            return this.unicode == that.unicode
+                && this.font == that.font
+                && this.width == that.width
+                && this.sharpness == that.sharpness
+                && this.epsilon == that.epsilon;
+        }
+
+        @Override
+        public int hashCode() {
+            int width = Float.floatToIntBits(this.width);
+            int sharpness = Float.floatToIntBits(this.sharpness);
+            int epsilon = Float.floatToIntBits(this.epsilon);
+
+            long l1 = (long) unicode << 32 | width;
+            long l2 = (long) sharpness << 32 | epsilon;
+            return (int) (hash(l1) ^ hash(l2)) ^ hash(font);
+        }
+    }
+
+    public static class Outline_Cache_Entry
+    {
+        public Render.Bezier_Buffer buffer;
+        public Outline_Cache_Entry next;
+        public Outline_Cache_Entry prev;
+        Outline_Cache_Key key;
+    }
+
+    public class Outline_Cache
+    {
+        HashMap<Outline_Cache_Key, Outline_Cache_Entry> outlines = new HashMap<>();
+        Outline_Cache_Entry first;
+        Outline_Cache_Entry last;
+        Outline_Cache_Entry freelist;
+        Render.Bezier_Buffer staging_buffer = new Render.Bezier_Buffer(64*KB, true);
+
+        long items_count;
+        long bytes_count;
+        long capacity = 9999999;
+        long max_bytes_count;
+        long max_items_count;
+
+        //some things so that we dont have to call new everytime
+        private final Outline_Cache_Key temp_key = new Outline_Cache_Key();
+        private final Buffers.PointArray temp_points = new Buffers.PointArray();
+        private final Buffers.PointArray temp_ders = new Buffers.PointArray();
+        private final Render.Bezier_Buffer.Line_Connection[] temp_connections = {
+                new Render.Bezier_Buffer.Line_Connection(),
+                new Render.Bezier_Buffer.Line_Connection(),
+        };
+
+        public Render.Bezier_Buffer get(Outline_Cache_Key key)
+        {
+            Outline_Cache_Entry entry = outlines.get(key);
+            if(entry == null)
+            {
+                Font font = fonts.get(key.font);
+                Kept_Glyph glyph = font.glyphs.get(key.unicode);
+                System.out.println(STR."OUTLINE_CACHE info: adding \{Integer.toHexString(key.unicode)} font \{font.fullname} with params width:\{key.width} sharpness:\{key.sharpness} epsilon:\{key.epsilon}");
+                if(glyph == null)
+                {
+                    System.out.println(STR."OUTLINE_CACHE error: font \{font.fullname} doesnt support glyph \{Integer.toHexString(key.unicode)}");
+                    return null;
+                }
+
+                //rasterize glyph
+                staging_buffer.reset();
+                float[] xs = glyph.processed.points.xs;
+                float[] ys = glyph.processed.points.ys;
+                int color = 0x000000;
+                for(var shape : glyph.processed.shapes)
+                    staging_buffer.submit_bezier_countour(temp_points, temp_ders, temp_connections, xs, ys, shape, key.width, key.sharpness, key.epsilon, color, null);
+
+                //if too much stuff remove untill space
+                int bytes = staging_buffer.length*Render.Bezier_Buffer.BYTES_PER_SEGMENT;
+                while(bytes + bytes_count > capacity)
+                {
+                    System.out.println(STR."OUTLINE_CACHE info: cache full evicting \{Integer.toHexString(key.unicode)} font \{font.fullname} with params width:\{key.width} sharpness:\{key.sharpness} epsilon:\{key.epsilon}");
+                    if(last == null)
+                    {
+                        System.out.println(STR."OUTLINE_CACHE error: no space to store even single shape of size \{(double) bytes/KB}KB");
+                        return null;
+                    }
+
+                    var unlinked = unlink(last);
+                    bytes_count -= (long) unlinked.buffer.length*Render.Bezier_Buffer.BYTES_PER_SEGMENT;
+                    unlinked.buffer.free_all();
+
+                    outlines.remove(unlinked.key);
+                    unlinked.next = freelist;
+                    freelist = unlinked;
+                }
+
+                //get new empty entry
+                if(freelist == null)
+                {
+                    System.out.println(STR."OUTLINE_CACHE debug: empty entry was created");
+                    entry = new Outline_Cache_Entry();
+                    entry.key = new Outline_Cache_Key();
+                    entry.buffer = new Render.Bezier_Buffer(0, true);
+                }
+                else
+                {
+                    System.out.println(STR."OUTLINE_CACHE debug: empty entry was found in freelist");
+                    entry = freelist;
+                    freelist = entry.next;
+                }
+
+                //fill empty entry
+                entry.buffer.grows = true;
+                entry.key.set(key.font, key.unicode, key.width, key.sharpness, key.epsilon);
+                entry.buffer.submit(staging_buffer, 0, staging_buffer.length);
+                entry.buffer.grows = false;
+
+                //insert into structures
+                link_front(entry);
+                outlines.put(entry.key, entry);
+
+                //update stats
+                bytes_count += bytes;
+                max_bytes_count = Math.max(max_bytes_count, bytes_count);
+                max_items_count = Math.max(max_items_count, outlines.size());
+            }
+            else
+            {
+                Font font = fonts.get(key.font);
+                //System.out.println(STR."OUTLINE_CACHE info: found in cache \{Integer.toHexString(key.unicode)} font \{font.fullname} with params width:\{key.width} sharpness:\{key.sharpness} epsilon:\{key.epsilon}");
+
+                //reinsert it as recently used
+                unlink(entry);
+                link_front(entry);
+            }
+
+            return entry.buffer;
+        }
+
+        private Outline_Cache_Entry link_front(Outline_Cache_Entry entry)
+        {
+            entry.next = first;
+            if(first != null)
+                first.prev = entry;
+            first = entry;
+            if(last == null)
+                last = entry;
+
+            return entry;
+        }
+
+        private Outline_Cache_Entry unlink(Outline_Cache_Entry entry)
+        {
+            assert entry != null;
+            if(first == entry)
+                first = entry.next;
+            if(last == entry)
+                last = entry.prev;
+
+            if(entry.next != null)
+                entry.next.prev = entry.prev;
+
+            if(entry.prev != null)
+                entry.prev.next = entry.next;
+
+            entry.prev = null;
+            entry.next = null;
+            return entry;
+        }
+
+        public Render.Bezier_Buffer get(int font, int unicode, float width, float sharpness, float epsilon)
+        {
+            temp_key.font = font;
+            temp_key.unicode = unicode;
+            temp_key.width = width;
+            temp_key.sharpness = sharpness;
+            temp_key.epsilon = epsilon;
+            return get(temp_key);
+        }
+    }
+
+    public static class Font
+    {
+        public String fullname;
+        public String name;
+        public String family;
+        public String subfamily;
+
+        Kept_Glyph missing_glyph = new Kept_Glyph();
+        HashMap<Integer, Kept_Glyph> glyphs = new HashMap<>();
+        Render.Bezier_Buffer glyph_buffer = new Render.Bezier_Buffer(64*KB, true);
+
+        Matrix3f temp_matrix = new Matrix3f();
+    }
+
+    public Text_Style temp_text_style = new Text_Style();
+    public boolean submit_styled_text(float x, float y, float max_x, float max_y, Render.Bezier_Buffer buffer, CharSequence text, Text_Style style, Matrix3f transform_or_null)
+    {
+        if(style == null)
+            style = DEF_TEXT_STYLE;
+
+        if(style.font_index < 0 || style.font_index > fonts.size())
+            return false;
+
+        Font font = fonts.get(style.font_index);
+
+        float curr_x = 0;
+        int k_x = 0;
+        int k_y = 0; //TODO
+        for(int c : text.codePoints().toArray()){
+            Kept_Glyph glyph = font.glyphs.getOrDefault(c, font.missing_glyph);
+            if(glyph == font.missing_glyph)
+                System.err.println(STR."Couldnt render unicode character '\{Character.toChars(c)}' using not found glyph");
+
+            font.temp_matrix.identity();
+            font.temp_matrix.m20 = k_x*style.spacing_x + curr_x + glyph.processed.left_side_bearing*style.spacing_scale_x;
+            font.temp_matrix.scale(style.size);
+            if(transform_or_null != null)
+                font.temp_matrix.mulLocal(transform_or_null);
+
+            buffer.submit(font.glyph_buffer, glyph.triangulated_from, glyph.triangulated_to, font.temp_matrix, true, style.color);
+            if(style.outline_width > 0)
+            {
+                var outline = outline_cache.get(style.font_index, c, style.outline_width, style.outline_sharpness, 0.001f);
+                if(outline != null)
+                    buffer.submit(outline, font.temp_matrix, true, style.outline_color);
+            }
+            curr_x += glyph.processed.advance_width*style.spacing_scale_x;
+            k_x += 1;
+        }
+
+        return true;
+    }
 
     public static class Processed_Glyph
     {
         public int solids_count;
         public int holes_count;
-        public Triangulate.PointArray points;
-        public Triangulate.IndexBuffer[] shapes;
+        public Buffers.PointArray points;
+        public Buffers.IndexBuffer[] shapes;
         public boolean[] are_solid;
-        //todo bezier lengths!
+        public Triangulate.AABB_Vertices aabb;
 
         public int unicode;
-        public int advance_width;
-        public int left_side_bearing;
+        public float advance_width;
+        public float left_side_bearing;
     }
 
     //TODO make this more optimized - allocate just once etc. ...
     public static Processed_Glyph preprocess_glyph(Font_Parser.Glyph glyph, int units_per_em)
     {
-        Triangulate.IndexBuffer[] shapes = new Triangulate.IndexBuffer[glyph.contour_ends.length];
+        Buffers.IndexBuffer[] shapes = new Buffers.IndexBuffer[glyph.contour_ends.length];
         boolean[] are_solid = new boolean[glyph.contour_ends.length];
         int[] contour_ends = glyph.contour_ends;
-        Triangulate.PointArray processed = new Triangulate.PointArray();
+        Buffers.PointArray processed = new Buffers.PointArray();
         processed.reserve(2*glyph.xs.length + 4);
 
         //find maximum length segment
@@ -100,8 +385,8 @@ public class Main {
         }
 
         //allocate temporary storage
-        Triangulate.PointArray with_implied_points = new Triangulate.PointArray();
-        Triangulate.BoolArray with_implied_on_curve = new Triangulate.BoolArray();
+        Buffers.PointArray with_implied_points = new Buffers.PointArray();
+        Buffers.BoolArray with_implied_on_curve = new Buffers.BoolArray();
         with_implied_points.reserve(max_segment*5/4 + 4);
         with_implied_on_curve.reserve(max_segment*5/4 + 4);
 
@@ -195,12 +480,13 @@ public class Main {
             }
 
             are_solid[k] = is_solid;
-            shapes[k] = Triangulate.IndexBuffer.range(out_from_i, out_to_i);
+            shapes[k] = Buffers.IndexBuffer.range(out_from_i, out_to_i);
         }
 
         Processed_Glyph out = new Processed_Glyph();
-        out.advance_width = glyph.advance_width;
-        out.left_side_bearing = glyph.left_side_bearing;
+        out.advance_width = (float) glyph.advance_width/units_per_em;
+        out.left_side_bearing = (float) glyph.left_side_bearing/units_per_em;
+        out.aabb = Triangulate.aabb_calculate(processed.xs, processed.ys, Buffers.IndexBuffer.til(processed.length));
         out.unicode = glyph.unicode;
         out.points = processed;
         out.are_solid = are_solid;
@@ -213,29 +499,37 @@ public class Main {
 
     public static class Triangulated_Glyph
     {
-        public Processed_Glyph glyph;
-        public Triangulate.IndexBuffer[] connected_solids;
-        public Triangulate.IndexBuffer triangles;
-        public Triangulate.IndexBuffer convex_beziers;
-        public Triangulate.IndexBuffer concave_beziers;
+        public Buffers.IndexBuffer[] connected_solids;
+        public Buffers.IndexBuffer triangles;
+        public Buffers.IndexBuffer convex_beziers;
+        public Buffers.IndexBuffer concave_beziers;
+    }
+
+    public static class Kept_Glyph
+    {
+        public Processed_Glyph processed;
+        public Buffers.IndexBuffer[] connected_solids;
+
+        public int triangulated_from;
+        public int triangulated_to;
     }
 
     public static Triangulated_Glyph triangulate_glyph(Processed_Glyph glyph)
     {
-        Triangulate.IndexBuffer triangles = new Triangulate.IndexBuffer();
-        Triangulate.IndexBuffer convex_beziers = new Triangulate.IndexBuffer();
-        Triangulate.IndexBuffer concave_beziers = new Triangulate.IndexBuffer();
+        Buffers.IndexBuffer triangles = new Buffers.IndexBuffer();
+        Buffers.IndexBuffer convex_beziers = new Buffers.IndexBuffer();
+        Buffers.IndexBuffer concave_beziers = new Buffers.IndexBuffer();
 
         //split into polygonal and bezier part
-        Triangulate.IndexBuffer[] polygon_holes = new Triangulate.IndexBuffer[glyph.holes_count];
-        Triangulate.IndexBuffer[] polygon_solids = new Triangulate.IndexBuffer[glyph.solids_count];
+        Buffers.IndexBuffer[] polygon_holes = new Buffers.IndexBuffer[glyph.holes_count];
+        Buffers.IndexBuffer[] polygon_solids = new Buffers.IndexBuffer[glyph.solids_count];
         {
             int solid_count = 0;
             int hole_count = 0;
             for(int k = 0; k < glyph.shapes.length; k++)
             {
-                Triangulate.IndexBuffer shape = glyph.shapes[k];
-                Triangulate.IndexBuffer polygon = new Triangulate.IndexBuffer();
+                Buffers.IndexBuffer shape = glyph.shapes[k];
+                Buffers.IndexBuffer polygon = new Buffers.IndexBuffer();
                 polygon.reserve(shape.length/2);
                 Triangulate.bezier_contour_classify(polygon, convex_beziers, concave_beziers, glyph.points.xs, glyph.points.ys, shape, (float) 1e-5, true);
 
@@ -247,109 +541,120 @@ public class Main {
         }
 
         //connect solids with holes
-        Triangulate.IndexBuffer[] connected_solids = new Triangulate.IndexBuffer[glyph.solids_count];
+        Buffers.IndexBuffer[] connected_solids = new Buffers.IndexBuffer[glyph.solids_count];
         for(int k = 0; k < glyph.solids_count; k++)
-            connected_solids[k] = Triangulate.connect_holes(null, glyph.points.xs, glyph.points.ys, polygon_solids[k], polygon_holes);
+        {
+            connected_solids[k] = new Buffers.IndexBuffer();
+            Triangulate.connect_holes(connected_solids[k], glyph.points.xs, glyph.points.ys, polygon_solids[k], polygon_holes, null);
+        }
 
-        for(int k = 0; k < connected_solids.length; k++)
-            Triangulate.triangulate(triangles, glyph.points.xs, glyph.points.ys, connected_solids[k], true);
+        for (Buffers.IndexBuffer connected : connected_solids)
+            Triangulate.triangulate(triangles, glyph.points.xs, glyph.points.ys, connected, true);
 
         Triangulated_Glyph out = new Triangulated_Glyph();
         out.connected_solids = connected_solids;
         out.triangles = triangles;
         out.concave_beziers = concave_beziers;
         out.convex_beziers = convex_beziers;
-        out.glyph = glyph;
         return out;
     }
 
-    static void sample_bezier(Triangulate.PointArray points, Triangulate.PointArray derivatives, float x1, float y1, float x2, float y2, float x3, float y3, int min_times_log2, int max_times_log2, float min_error)
+    public static boolean font_load(Font out, CharSequence sequence, ArrayList<Font_Parser.Font_Log> logs)
     {
-        class H {
-            static float sqr_dist(float x1, float y1, float x2, float y2) {
-                float dx = x1 - x2;
-                float dy = y1 - y2;
-                return dx*dx + dy*dy;
-            }
+        Font_Parser.Font font = Font_Parser.parse_load(sequence.toString(), logs);
+        if(font == null || font.glyphs == null)
+            return false;
 
-            static void sample_recursive(Triangulate.PointArray points, Triangulate.PointArray derivatives, float x1, float y1, float x2, float y2, float x3, float y3, int min_times_log2, int max_times_log2, float sqr_min_error, int depth)
-            {
-                if(depth > max_times_log2)
-                    return;
+        out.family = font.family;
+        out.name = font.name;
+        out.subfamily = font.subfamily;
+        out.fullname = font.name; //for now;
 
-                float area = Triangulate.cross_product_z(x2, y2, x1, y1, x3, y3);
-                float sqr_base = sqr_dist(x1, y1, x3, y3);
-                if(area*area <= sqr_min_error*sqr_base && depth >= min_times_log2)
-                    return;
+        final long start_time = System.nanoTime();
+        for (var entry : font.glyphs.entrySet()) {
+            Font_Parser.Glyph glyph = entry.getValue();
 
-                float x_mid = Splines.bezier(x1, x2, x3, 0.5f);
-                float y_mid = Splines.bezier(y1, y2, y3, 0.5f);
+            //process and triangulate
+            Processed_Glyph processed = preprocess_glyph(glyph, font.units_per_em);
+            if(glyph.unicode == "h".codePointAt(0))
+                System.out.println("!");
+            Triangulated_Glyph triangulated = triangulate_glyph(processed);
 
-                float lo_x2 = (x1 + x2)/2;
-                float lo_y2 = (y1 + y2)/2;
-                sample_recursive(points, derivatives, x1, y1, lo_x2, lo_y2, x_mid, y_mid, min_times_log2, max_times_log2, sqr_min_error, depth + 1);
+            //submit into centralized buffer
+            int solids_color = 0x00;
+            int convex_flags = Render.Bezier_Buffer.FLAG_BEZIER;
+            int concave_flags = Render.Bezier_Buffer.FLAG_BEZIER
+                    | Render.Bezier_Buffer.FLAG_INVERSE;
 
-                points.push(x_mid, y_mid);
-                if(derivatives != null)
-                {
-                    derivatives.push(
-                        Splines.bezier_derivative(x1, x2, x3, 0.5f),
-                        Splines.bezier_derivative(y1, y2, y3, 0.5f)
-                    );
-                }
+            int triangulated_from = out.glyph_buffer.length;
+            out.glyph_buffer.submit_indexed_triangles(processed.points.xs, processed.points.ys, triangulated.triangles, solids_color, 0, null);
+            out.glyph_buffer.submit_indexed_triangles(processed.points.xs, processed.points.ys, triangulated.convex_beziers, solids_color, convex_flags, null);
+            out.glyph_buffer.submit_indexed_triangles(processed.points.xs, processed.points.ys, triangulated.concave_beziers, solids_color, concave_flags, null);
 
-                float hi_x2 = (x2 + x3)/2;
-                float hi_y2 = (y2 + y3)/2;
-                sample_recursive(points, derivatives, x_mid, y_mid, hi_x2, hi_y2, x3, y3, min_times_log2, max_times_log2, sqr_min_error, depth + 1);
-            }
+            //create kept and store
+            Kept_Glyph kept = new Kept_Glyph();
+            kept.processed = processed;
+            kept.connected_solids = triangulated.connected_solids;
+            kept.triangulated_from = triangulated_from;
+            kept.triangulated_to = out.glyph_buffer.length;
+            out.glyphs.put(glyph.unicode, kept);
+
+            //assign missing glyph
+            if(glyph.index == 0)
+                out.missing_glyph = kept;
         }
-
-        float sqr_min_error = min_error*min_error;
-        //detect problematic curves and subdivide them at least once
-        if(min_times_log2 == 0)
-            if(H.sqr_dist(x1, y1, x3, y3) == 0 && H.sqr_dist(x1, y1, x2, y2) != 0)
-                min_times_log2 = 1;
-
-        points.push(x1, y1);
-        if(derivatives != null)
-            derivatives.push(
-                Splines.bezier_derivative(x1, x2, x3, 0),
-                Splines.bezier_derivative(y1, y2, y3, 0)
-            );
-        H.sample_recursive(points, derivatives, x1, y1, x2, y2, x3, y3, min_times_log2, max_times_log2, sqr_min_error, 0);
-        points.push(x3, y3);
-        if(derivatives != null)
-            derivatives.push(
-                    Splines.bezier_derivative(x1, x2, x3, 1),
-                    Splines.bezier_derivative(y1, y2, y3, 1)
-            );
+        final long end_time = System.nanoTime();
+        System.out.println(STR."Processing took \{(end_time-start_time)*1e3} us");
+        return true;
     }
 
-    static void sample_bezier(Triangulate.PointArray points, float x1, float y1, float x2, float y2, float x3, float y3, float min_error)
+    public static final int BUTTON_FILL_COLOR = 0xAAAAAA;
+    public static final int BUTTON_OUTLINE_COLOR = 0x999999;
+    public static final int BUTTON_TEXT_COLOR = 0x111111;
+    public static final float BUTTON_CORNER_RADIUS = 0.05f;
+    public static final float BUTTON_OUTLINE_WIDTH = 0.005f;
+    public static final Matrix3f BUTTON_TRANSFORM = new Matrix3f().identity().m10(0.1f); //slight sheer
+    public boolean do_button(float x, float y, CharSequence text, float width, float height)
     {
-        sample_bezier(points, null, x1, y1, x2, y2, x3, y3, 0, 16, min_error);
+        float pad = 0.01f;
+        ui_buffer.submit_rounded_rectangle(x, y, width + 2*BUTTON_OUTLINE_WIDTH, height+2*BUTTON_OUTLINE_WIDTH, BUTTON_CORNER_RADIUS, BUTTON_OUTLINE_COLOR, BUTTON_TRANSFORM);
+        ui_buffer.submit_rounded_rectangle(x, y, width, height, BUTTON_CORNER_RADIUS, BUTTON_FILL_COLOR, BUTTON_TRANSFORM);
+
+//        submit_styled_text(
+//                0, 0,
+//                0, 0,
+//                ui_buffer, text, UI_TEXT_STYLE, null
+//        );
+
+        submit_styled_text(
+            x - width/2 + pad, y + height/2 - pad,
+            x + width/2 - pad, y - height/2 + pad,
+                ui_buffer, text, UI_TEXT_STYLE, BUTTON_TRANSFORM
+        );
+
+        float norm_mouse_x = (float) mouseX/window_width - 0.5f;
+        float norm_mouse_y = (float) mouseY/window_height - 0.5f;
+
+        if(x - width/2 <= norm_mouse_x && norm_mouse_x <= x + width/2)
+            if(y - width/2 <= norm_mouse_y && norm_mouse_y <= y + width/2)
+                return true;
+
+        return false;
     }
 
     private void run() {
 
         ArrayList<Font_Parser.Font_Log> logs = new ArrayList<>();
-        Font_Parser.Font font = Font_Parser.parse_load("./assets/fonts/Roboto/Roboto-Black.ttf", logs);
-        if(font == null || font.glyphs == null)
+
+        Font loaded = new Font();
+        boolean font_load_state = font_load(loaded, "./assets/fonts/Roboto/Roboto-Black.ttf", logs);
+        for(var log : logs)
+            if(log.category.equals("info") == false && log.category.equals("debug") == false)
+                System.out.println(STR."FONT_PARSE \{log.category}: [\{log.table}] \{log.error}");
+        if(font_load_state == false)
             throw new IllegalStateException("Unable to Read font file");
 
-        HashMap<Integer, Triangulated_Glyph> glyph_cache = new HashMap<>();
-        {
-            final long start_time = System.currentTimeMillis();
-            for (var entry : font.glyphs.entrySet()) {
-                Font_Parser.Glyph glyph = entry.getValue();
-                Processed_Glyph processed = preprocess_glyph(glyph, font.units_per_em);
-                Triangulated_Glyph triangulated = triangulate_glyph(processed);
-                glyph_cache.put(triangulated.glyph.unicode, triangulated);
-            }
-            final long end_time = System.currentTimeMillis();
-            System.out.println(STR."Processing took \{end_time-start_time} ms");
-        }
-
+        fonts.add(loaded);
         if (!glfwInit())
             throw new IllegalStateException("Unable to initialize GLFW");
 
@@ -360,9 +665,10 @@ public class Main {
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
         glfwWindowHint(GLFW_SAMPLES, 8);
 
-        long window = glfwCreateWindow(width, height, "graphix", NULL, NULL);
+        long window = glfwCreateWindow(window_width, window_height, "graphix", NULL, NULL);
         if (window == NULL)
             throw new RuntimeException("Failed to create the GLFW window");
+
 
         glfwSetKeyCallback(window, (long window1, int key, int scancode, int action, int mods) -> {
             if (key == GLFW_KEY_ESCAPE && action == GLFW_RELEASE) {
@@ -373,9 +679,9 @@ public class Main {
         });
         glfwSetFramebufferSizeCallback(window, (long window3, int w, int h) -> {
             if (w > 0 && h > 0) {
-                width = w;
-                height = h;
-                glViewport(0, 0, width, height);
+                window_width = w;
+                window_height = h;
+                glViewport(0, 0, window_width, window_height);
             }
         });
         glfwSetCursorPosCallback(window, (long window_, double xpos, double ypos) -> {
@@ -383,8 +689,8 @@ public class Main {
                 float zoom = (float) Math.exp(zoom_val);
                 float deltaX = (float) xpos - mouseX;
                 float deltaY = (float) ypos - mouseY;
-                position.x += deltaX/width*2/zoom;
-                position.y -= deltaY/height*2/zoom;
+                position.x += deltaX/ window_width *2/zoom;
+                position.y -= deltaY/ window_height *2/zoom;
 
                 //orientation.rotateLocalX(deltaY * 0.01f).rotateLocalY(deltaX * 0.01f);
             }
@@ -399,7 +705,7 @@ public class Main {
         });
 
         glfwSetScrollCallback(window, (long window_, double deltax, double deltay) -> {
-            zoom_val += (float)deltax*ZOOM_SPEED_SCROLL*dt;
+            zoom_val += (float)deltay*ZOOM_SPEED_SCROLL*dt;
         });
 
         try (MemoryStack stack = stackPush()) {
@@ -410,13 +716,13 @@ public class Main {
             // Get the resolution of the primary monitor
             GLFWVidMode vidmode = glfwGetVideoMode(glfwGetPrimaryMonitor());
 
-            width = pWidth.get(0);
-            height = pHeight.get(0);
+            window_width = pWidth.get(0);
+            window_height = pHeight.get(0);
             // Center the window
             glfwSetWindowPos(
                     window,
-                    (vidmode.width() - width) / 2,
-                    (vidmode.height() - height) / 2
+                    (vidmode.width() - window_width) / 2,
+                    (vidmode.height() - window_height) / 2
             );
         }
 
@@ -425,158 +731,16 @@ public class Main {
         GL.createCapabilities();
         var debugProc = GLUtil.setupDebugMessageCallback();
 ;
+        render = new Render.Quadratic_Bezier_Render(64*MB);
+
         glEnable(GL_BLEND);
         glEnable(GL_FRAMEBUFFER_SRGB);
         glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ZERO);
 
-        Render.Quadratic_Bezier_Render bezier_render = new Render.Quadratic_Bezier_Render(64*MB);
-        Render.Bezier_Buffer bezier_buffer = new Render.Bezier_Buffer(64*MB);
-        Render.Bezier_Buffer glyph_buffer = new Render.Bezier_Buffer(4*MB);
-        glyph_buffer.grows = false;
-
-        /*
-        if(false)
-        {
-            int resx = 200;
-            int resy = 200;
-            Font_Parser.Glyph glyph = font.glyphs.get("a".codePointAt(0));
-            float scalex = 1.0f/font.units_per_em;
-            float scaley = 1.0f/font.units_per_em;
-            boolean[] raster = rasterize_glyph(glyph, resx, resy, 1, 1, font.units_per_em);
-
-            for(int yi = 0; yi < resy; yi++)
-                for(int xi = 0; xi < resx; xi++)
-                    if(raster[xi + yi*resx])
-                        glyph_buffer.submit_circle((float)xi/resx, (float)yi/resy, 0.5f/resx, 0x0, null);
-        }
-        */
-        {
-            Triangulated_Glyph triangulated = glyph_cache.get("ξ".codePointAt(0));
-            Processed_Glyph processed = triangulated.glyph;
-
-            //triangulate
-            int[] colors = {0xFF0000, 0x00FF00, 0x0000FF, 0xFF0000, 0x00FF00, 0x0000FF, 0xFF0000, 0x00FF00, 0x0000FF};
-
-            //Draw triangulated solid regions
-            int solids_color = 0x00;
-            int convex_flags = Render.Bezier_Buffer.FLAG_BEZIER;
-            int concave_flags = Render.Bezier_Buffer.FLAG_BEZIER
-                    | Render.Bezier_Buffer.FLAG_INVERSE;
-
-            glyph_buffer.submit_indexed_triangles(processed.points.xs, processed.points.ys, triangulated.triangles, solids_color, 0, null);
-            glyph_buffer.submit_indexed_triangles(processed.points.xs, processed.points.ys, triangulated.convex_beziers, solids_color, convex_flags, null);
-            glyph_buffer.submit_indexed_triangles(processed.points.xs, processed.points.ys, triangulated.concave_beziers, solids_color, concave_flags, null);
-            {
-                Triangulate.PointArray temp_points = new Triangulate.PointArray();
-                Triangulate.PointArray temp_ders = new Triangulate.PointArray();
-                Render.Bezier_Buffer.Line_Connection[] connections = {
-                    new Render.Bezier_Buffer.Line_Connection(),
-                    new Render.Bezier_Buffer.Line_Connection(),
-                };
-
-                float[] xs = processed.points.xs;
-                float[] ys = processed.points.ys;
-                float r = 0.05f;
-                float bezier_epsilon = 0.0005f;
-                boolean do_rounded = false;
-                float sharp_cutoff_threshold = 1f;
-                int color = 0xAAFF0000;
-                for(var shape : processed.shapes)
-                {
-                    //if length is 2 its a single vertex
-                    //if length is >= 4 its at least a line...
-                    if(shape.length >= 4)
-                    {
-                        float pmx = xs[shape.at(shape.length - 3)];
-                        float pmy = ys[shape.at(shape.length - 3)];
-                        float p0x = xs[shape.at(shape.length - 2)];
-                        float p0y = ys[shape.at(shape.length - 2)];
-                        float p1x = xs[shape.at(shape.length - 1)];
-                        float p1y = ys[shape.at(shape.length - 1)];
-                        for(int it = 0; it <= shape.length; it += 2)
-                        {
-                            int i = it;
-                            if(i >= shape.length)
-                                i = 0;
-
-                            int vi = shape.at(i);
-                            int vn = shape.at(i+1);
-                            float p2x = xs[vi];
-                            float p2y = ys[vi];
-                            float p3x = xs[vn];
-                            float p3y = ys[vn];
-
-                            Render.Bezier_Buffer.Line_Connection prev_connection = connections[(it/2+1) & 1];
-                            Render.Bezier_Buffer.Line_Connection curr_connection = connections[(it/2+0) & 1];
-
-                            if((p0x == p1x && p0y == p1y)) {
-                                Render.Bezier_Buffer.calculate_line_connection(curr_connection, pmx, pmy, p1x, p1y, p2x, p2y, r, do_rounded, sharp_cutoff_threshold);
-                                if(it > 0) {
-                                    glyph_buffer.submit_connected_line(
-                                        prev_connection, curr_connection,
-                                        pmx, pmy,
-                                        p1x, p1y, color, null
-                                    );
-                                }
-                            }
-                            else {
-                                Render.Bezier_Buffer.calculate_line_connection(curr_connection, p0x, p0y, p1x, p1y, p2x, p2y, r, do_rounded, sharp_cutoff_threshold);
-                                if(it > 0) {
-                                    glyph_buffer.submit_bezier_line(
-                                        prev_connection, curr_connection,
-                                        temp_points, temp_ders,
-                                        pmx, pmy,
-                                        p0x, p0y,
-                                        p1x, p1y,
-                                        bezier_epsilon, 2*r, color, null
-                                    );
-                                }
-                            }
-
-//                            glyph_buffer.submit_circle(pmx + prev_connection.v_side_x1, pmy + prev_connection.v_side_y1, r/2, 0xFF, null);
-                            pmx = p1x;
-                            pmy = p1y;
-                            p0x = p2x;
-                            p0y = p2y;
-                            p1x = p3x;
-                            p1y = p3y;
-                        }
-                    }
-                }
-            }
-
-            //draw connections polygons
-            if(false)
-            {
-            Triangulate.PointArray points = processed.points;
-            for(int k = 0; k < processed.solids_count; k++)
-            {
-                //int point_color = 0x330000FF;
-                int point_color = colors[k];
-                float r = 0.005f;
-                Triangulate.IndexBuffer connected = triangulated.connected_solids[k];
-
-                int j = connected.length - 1;
-                for(int i = 0; i < connected.length; i++)
-                {
-                    int vj = connected.at(j);
-                    int vi = connected.at(i);
-                    glyph_buffer.submit_line(points.xs[vj], points.ys[vj], points.xs[vi], points.ys[vi], r, point_color, null);
-                    glyph_buffer.submit_circle(points.xs[vi], points.ys[vi], r, point_color, null);
-                    j = i;
-                }
-            }
-            }
-        }
-
-
-//        glyph_buffer.submit_text_countour(font, "obaH", 1.0f/font.units_per_em, 0.05f, 0.05f, 1, 0x80FFFFFF, null);
 
         Matrix4f view_matrix = new Matrix4f();
         Matrix3f transf_matrix = new Matrix3f();
         Matrix4f model_matrix = new Matrix4f();
-
-
 
         Colorspace clear_color = new Colorspace(0.9f, 0.9f, 0.9f).srgb_to_lin();
         glfwShowWindow(window);
@@ -584,6 +748,9 @@ public class Main {
 
         Vector3f move_dir = new Vector3f();
         Vector3f view_position = new Vector3f();
+        Colorspace temp_color = new Colorspace(0);
+
+
         while (!glfwWindowShouldClose(window)) {
 
             try (MemoryStack frame_stack = stackPush()) {
@@ -620,19 +787,68 @@ public class Main {
                 if(move_dir.x != 0 || move_dir.y != 0)
                     position.add(move_dir.normalize().mul(dt * camera_speed/zoom));
 
+                int curr_color = rainbow(thisTime*1e-9, 0.5f);
+
                 view_position.set(position).mul(zoom);
-                view_matrix.identity().scaleXY((float)height/width, 1).rotateZ(rotation).translateLocal(view_position).scale(zoom);
+                view_matrix.identity().scaleXY((float) window_height / window_width, 1).rotateZ(rotation).translateLocal(view_position).scale(zoom);
 
                 glClearColor(clear_color.x, clear_color.y, clear_color.z, clear_color.a);
                 glClear(GL_COLOR_BUFFER_BIT);
 
-                bezier_render.render(model_matrix, view_matrix, bezier_buffer);
-                bezier_render.render(model_matrix, view_matrix, glyph_buffer);
-                bezier_buffer.reset();
+                glyph_buffer.reset();
+                ui_buffer.reset();
+                if(do_button(0, 0, "hello", 0.3f, 0.07f))
+                    ui_buffer.submit_circle(0, 0, 1, 0xFF, null);
+//                if(false)
+                {
+                    submit_styled_text(0, 0, 0, 0, glyph_buffer, "hello world", DEF_TEXT_STYLE, null);
+//                    var outline = outline_cache.get(0, "h".codePointAt(0), 0.005f, 0.75f, 0.001f);
+//                    glyph_buffer.submit(outline, null, true, curr_color);
+
+
+                    Kept_Glyph glyph = loaded.glyphs.getOrDefault("h".codePointAt(0), loaded.missing_glyph);
+
+                    float r = 0.005f;
+                    for(var solid : glyph.connected_solids)
+                    {
+                        int color = 0xFF;
+                        float[] xs = glyph.processed.points.xs;
+                        float[] ys = glyph.processed.points.ys;
+                        int j = solid.length - 1;
+                        for(int i = 0; i < solid.length; j = i, i++)
+                        {
+                            glyph_buffer.submit_line(
+                                xs[solid.at(j)], ys[solid.at(j)],
+                                xs[solid.at(i)], ys[solid.at(i)],
+                                r, color, null
+                            );
+                            glyph_buffer.submit_circle(xs[solid.at(j)], ys[solid.at(j)], r, color, null);
+                        }
+
+
+                        glyph_buffer.submit_circle(xs[0], ys[0], r, 0x00FF00, null);
+                        glyph_buffer.submit_circle(xs[25], ys[25], r, 0x00FF00, null);
+                        glyph_buffer.submit_circle(xs[27], ys[27], r, 0x00FF00, null);
+                    }
+//                    glyph_buffer.submit(loaded.glyph_buffer, glyph.triangulated_from, glyph.triangulated_to, null, true, curr_color);
+//                    glyph_buffer.submit_circle(0, 0, 1, curr_color, null);
+                }
+
+                render.render(model_matrix, view_matrix, glyph_buffer);
+                render.render(model_matrix, null, ui_buffer);
 
                 glfwSwapBuffers(window);
             }
         }
+    }
+
+    public static int rainbow(double t, float alpha)
+    {
+        float x = (float) Math.pow(Math.sin(t), 2);
+        float y = (float) Math.pow(Math.cos(t), 2);
+        float z = (float) Math.pow(Math.cos(1.5 + t)/2 + 0.5f, 2);
+        float a = alpha;
+        return Colorspace.rgba_to_hex(x, y, z, a);
     }
 
     public static void main(String[] args) {

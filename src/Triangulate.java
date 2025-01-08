@@ -1,184 +1,8 @@
+import java.util.ArrayList;
 import java.util.Arrays;
-
 public final class Triangulate {
-    public static final class PointArray
-    {
-        public float[] xs = new float[0];
-        public float[] ys = new float[0];
-        public int length = 0;
 
-        void resize(int length)
-        {
-            reserve(length);
-            this.length = length;
-        }
-
-        void reserve(int length)
-        {
-            if(length > this.xs.length) {
-                int new_cap = Math.max(this.xs.length*3/2 + 8, length);
-                this.xs = Arrays.copyOf(this.xs, new_cap);
-                this.ys = Arrays.copyOf(this.ys, new_cap);
-            }
-        }
-
-        void push(float x1, float y1)
-        {
-            reserve(this.length + 1);
-            this.xs[this.length] = x1;
-            this.ys[this.length] = y1;
-            this.length += 1;
-        }
-
-        void push(float x1, float y1, float x2, float y2)
-        {
-            reserve(this.length + 2);
-            this.xs[this.length] = x1;
-            this.ys[this.length] = y1;
-            this.xs[this.length + 1] = x2;
-            this.ys[this.length + 1] = y2;
-            this.length += 2;
-        }
-
-        void push(float x1, float y1, float x2, float y2, float x3, float y3)
-        {
-            reserve(this.length + 3);
-            this.xs[this.length] = x1;
-            this.ys[this.length] = y1;
-            this.xs[this.length + 1] = x2;
-            this.ys[this.length + 1] = y2;
-            this.xs[this.length + 2] = x3;
-            this.ys[this.length + 2] = y3;
-            this.length += 3;
-        }
-    }
-
-    public static final class BoolArray
-    {
-        public boolean[] items = new boolean[0];
-        public int length = 0;
-
-        void resize(int length)
-        {
-            reserve(length);
-            this.length = length;
-        }
-
-        void reserve(int length)
-        {
-            if(length > this.items.length) {
-                int new_cap = Math.max(this.items.length*3/2 + 8, length);
-                this.items = Arrays.copyOf(this.items, new_cap);
-            }
-        }
-
-        void push(boolean b)
-        {
-            resize(this.length + 1);
-            this.items[this.length - 1] = b;
-        }
-    }
-
-    //IndexBuffer acts as a simple array iterator (from, to, stride).
-    //Optionally one can also attach actual array of indices for more indirection
-    // and arbitrary iteration order. In case of attached index array
-    // the (from, to, stride) applies to it.
-    public static final class IndexBuffer {
-        public int[] indices;
-        public int from;
-        public int length;
-        public int stride = 1;
-
-        public int at(int i)
-        {
-            int o = from + stride*i;
-            if(indices == null)
-                return o;
-            else
-                return indices[o];
-        }
-
-        void resize(int length)
-        {
-            reserve(length);
-            this.length = length;
-        }
-
-        void reserve(int length)
-        {
-            if(indices == null || length > indices.length) {
-                if(indices == null)
-                {
-                    indices = new int[length];
-                    for(int i = 0; i < length; i++)
-                        indices[i] = from + i*stride;
-
-                    from = 0;
-                    stride = 1;
-                }
-                else
-                {
-                    int new_cap = Math.max(length, this.indices.length*3/2 + 8);
-                    this.indices = Arrays.copyOf(this.indices, this.from + new_cap*this.stride);
-                }
-            }
-        }
-
-        void push(int i)
-        {
-            reserve(length + 1);
-            indices[from + length*stride] = i;
-            length += 1;
-        }
-
-        void push(int i1, int i2)
-        {
-            reserve(length + 2);
-            indices[from + (length + 0)*stride] = i1;
-            indices[from + (length + 1)*stride] = i2;
-            length += 2;
-        }
-
-        void push(int i1, int i2, int i3)
-        {
-            reserve(length + 3);
-            indices[from + (length + 0)*stride] = i1;
-            indices[from + (length + 1)*stride] = i2;
-            indices[from + (length + 2)*stride] = i3;
-            length += 3;
-        }
-
-        public static IndexBuffer til(int to)
-        {
-            return IndexBuffer.range(0, to, 1);
-        }
-
-        public static IndexBuffer range(int from, int to)
-        {
-            return IndexBuffer.range(from, to, 1);
-        }
-
-        public static IndexBuffer range(int from, int to, int stride)
-        {
-            IndexBuffer out = new IndexBuffer();
-            out.from = from;
-            out.stride = stride;
-            out.length = (to - from)/stride;
-            return out;
-        }
-
-        public static IndexBuffer from_indices(int[] indices, int from, int to)
-        {
-            IndexBuffer out = new IndexBuffer();
-            out.indices = indices;
-            out.from = from;
-            out.length = to - from;
-            out.stride = 1;
-            return out;
-        }
-    }
-
-    public static void bezier_normalize_append_x(PointArray into, float[] xs, float[] ys, IndexBuffer indices)
+    public static void bezier_normalize_append_x(Buffers.PointArray into, float[] xs, float[] ys, Buffers.IndexBuffer indices)
     {
         if(indices.length == 0)
             return;
@@ -223,7 +47,7 @@ public final class Triangulate {
         }
     }
 
-    public static void bezier_normalize_append_y(PointArray into, float[] xs, float[] ys, IndexBuffer indices)
+    public static void bezier_normalize_append_y(Buffers.PointArray into, float[] xs, float[] ys, Buffers.IndexBuffer indices)
     {
         if(indices.length == 0)
             return;
@@ -264,7 +88,7 @@ public final class Triangulate {
     public static final int BEZIER_IS_NORMALIZED_X = 1;
     public static final int BEZIER_IS_NORMALIZED_Y = 2;
     public static final int BEZIER_IS_NORMALIZED_ASSERT = 4;
-    public static boolean bezier_is_normalized(float[] xs, float[] ys, IndexBuffer indices, int options)
+    public static boolean bezier_is_normalized(float[] xs, float[] ys, Buffers.IndexBuffer indices, int options)
     {
         boolean out = true;
         float x1 = xs[indices.at(indices.length - 1)];
@@ -296,19 +120,19 @@ public final class Triangulate {
         return out;
     }
 
-    public static void bezier_normalize_x(PointArray into, float[] xs, float[] ys, IndexBuffer indices)
+    public static void bezier_normalize_x(Buffers.PointArray into, float[] xs, float[] ys, Buffers.IndexBuffer indices)
     {
         into.resize(0);
         bezier_normalize_append_x(into, xs, ys, indices);
     }
 
-    public static void bezier_normalize_y(PointArray into, float[] xs, float[] ys, IndexBuffer indices)
+    public static void bezier_normalize_y(Buffers.PointArray into, float[] xs, float[] ys, Buffers.IndexBuffer indices)
     {
         into.resize(0);
         bezier_normalize_append_y(into, xs, ys, indices);
     }
 
-    public static void bezier_contour_classify(IndexBuffer polygon, IndexBuffer convex_beziers, IndexBuffer concave_beziers, float[] xs, float[] ys, IndexBuffer indices, float linear_epsilon, boolean append)
+    public static void bezier_contour_classify(Buffers.IndexBuffer polygon, Buffers.IndexBuffer convex_beziers, Buffers.IndexBuffer concave_beziers, float[] xs, float[] ys, Buffers.IndexBuffer indices, float linear_epsilon, boolean append)
     {
         if(append == false) {
             if(polygon != null) polygon.resize(0);
@@ -346,24 +170,22 @@ public final class Triangulate {
         }
     }
 
-    public static void bezier_contour_classify(IndexBuffer polygon_or_null, IndexBuffer convex_beziers_or_null, IndexBuffer concave_beziers_or_null, float[] xs, float[] ys, IndexBuffer indices)
+    public static void bezier_contour_classify(Buffers.IndexBuffer polygon_or_null, Buffers.IndexBuffer convex_beziers_or_null, Buffers.IndexBuffer concave_beziers_or_null, float[] xs, float[] ys, Buffers.IndexBuffer indices)
     {
         float eps = (float) 1e-4;
         bezier_contour_classify(polygon_or_null, convex_beziers_or_null, concave_beziers_or_null, xs, ys, indices, eps, false);
     }
 
-    public static IndexBuffer connect_holes(IndexBuffer into, float[] xs, float[] ys, IndexBuffer indices, IndexBuffer[] holes)
+    public static int connect_holes(Buffers.IndexBuffer into, float[] xs, float[] ys, Buffers.IndexBuffer indices, Buffers.IndexBuffer[] holes, ArrayList<Integer> error_holes_or_null)
     {
-        if(into == null)
-            into = new IndexBuffer();
-
         //calculate the needed allocation size for the holes
         int total_cap = indices.length;
-        for(IndexBuffer hole : holes)
+        for(Buffers.IndexBuffer hole : holes)
             total_cap += hole.length;
 
         total_cap += holes.length*2; //the bridges
 
+        int errors = 0;
         //add all of the input vertices
         into.resize(0);
         into.reserve(into.length + total_cap);
@@ -371,11 +193,15 @@ public final class Triangulate {
             into.push(indices.at(i));
 
         int hole_num = 0;
-        for(IndexBuffer hole : holes)
+        for(Buffers.IndexBuffer hole : holes)
         {
             hole_num += 1;
             if(hole.length == 0)
-                System.out.println(STR."TRIANGULATE warn: hole #\{hole_num} is zero sized. Ignoring.");
+            {
+                if(error_holes_or_null != null)
+                    error_holes_or_null.add(hole_num - 1);
+                errors += 1;
+            }
             else
             {
                 //test whether this hole is inside the shape
@@ -383,7 +209,12 @@ public final class Triangulate {
                 float first_y = ys[hole.at(0)];
                 boolean is_inside = is_inside_polygon_hit(POINT_IN_SHAPE_INTERIOR, xs, ys, into, first_x, first_y);
                 if(is_inside == false)
-                    System.out.println(STR."TRIANGULATE warn: hole #\{hole_num} not inside shape. Ignoring.");
+                {
+                    if(error_holes_or_null != null)
+                        error_holes_or_null.add(hole_num - 1);
+
+                    errors += 1;
+                }
                 else
                 {
                     //find closest vertices
@@ -446,13 +277,11 @@ public final class Triangulate {
             }
         }
 
-        return into;
+        return errors;
     }
 
-    public static IndexBuffer triangulate(IndexBuffer triangle_indices, float[] xs, float[] ys, IndexBuffer indices, boolean append)
+    public static int triangulate(Buffers.IndexBuffer triangle_indices, float[] xs, float[] ys, Buffers.IndexBuffer indices, boolean append)
     {
-        if(triangle_indices == null)
-            triangle_indices = new IndexBuffer();
         if(append == false)
             triangle_indices.resize(0);
         triangle_indices.reserve(3*indices.length);
@@ -503,13 +332,10 @@ public final class Triangulate {
             }
 
             if(did_remove == false)
-            {
-                System.out.println("TRIANGULATE warn: triangulate failed to form a valid triangle. Broken geometry?");
                 break;
-            }
         }
 
-        return triangle_indices;
+        return remaining_len >= 3 ? remaining_len : 0;
     }
 
     public static float cross_product_z(float ux, float uy, float vx, float vy)
@@ -524,7 +350,7 @@ public final class Triangulate {
     public static int POINT_IN_SHAPE_WITH_BOUNDARY = 0;
     public static int POINT_IN_SHAPE_INTERIOR = 1;
     public static int POINT_IN_SHAPE_BOUNDARY_DONT_CARE = 2;
-    public static boolean is_inside_polygon_winding(int allow_boundary, float[] x, float[] y, IndexBuffer indices, float origin_x, float origin_y)
+    public static boolean is_inside_polygon_winding(int allow_boundary, float[] x, float[] y, Buffers.IndexBuffer indices, float origin_x, float origin_y)
     {
         //https://web.archive.org/web/20130126163405/http://geomalgorithms.com/a03-_inclusion.html
         if(indices.length == 0)
@@ -566,7 +392,7 @@ public final class Triangulate {
         return winding_number != 0;
     }
 
-    public static boolean is_inside_polygon_hit(int allow_boundary, float[] x, float[] y, IndexBuffer indices, float origin_x, float origin_y)
+    public static boolean is_inside_polygon_hit(int allow_boundary, float[] x, float[] y, Buffers.IndexBuffer indices, float origin_x, float origin_y)
     {
         if(indices.length == 0)
             return false;
@@ -751,7 +577,7 @@ public final class Triangulate {
     }
 
     //raycast in x direction starting from origin
-    public static int raycast_x_polygon_first_optimistic_hit(float[] x, float[] y, IndexBuffer indices, float origin_x, float origin_y)
+    public static int raycast_x_polygon_first_optimistic_hit(float[] x, float[] y, Buffers.IndexBuffer indices, float origin_x, float origin_y)
     {
         if(indices.length == 0)
             return -1;
@@ -854,7 +680,7 @@ public final class Triangulate {
             {
                 float[] xs = {x1, x2, x3, px};
                 float[] ys = {y1, y2, y3, py};
-                IndexBuffer range = IndexBuffer.til(3);
+                Buffers.IndexBuffer range = Buffers.IndexBuffer.til(3);
 
                 float[] degenrate_xs = {x1, x1, x2, x2, x3, x3};
                 float[] degenrate_ys = {y1, y1, y2, y2, y3, y3};
@@ -965,7 +791,7 @@ public final class Triangulate {
         return out;
     }
 
-    public static AABB_Vertices aabb_calculate(float[] xs, float[] ys, IndexBuffer indices)
+    public static AABB_Vertices aabb_calculate(float[] xs, float[] ys, Buffers.IndexBuffer indices)
     {
         AABB_Vertices aabb = new AABB_Vertices();
         if(indices.length > 0)
