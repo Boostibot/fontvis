@@ -294,23 +294,26 @@ public final class Triangulate {
         while(remaining_len >= 3)
         {
             boolean did_remove = false;
-            for(int i = 1; i <= remaining_len; i++)
+            for(int i = 0; i < remaining_len; i++)
             {
                 int rem = remaining_len; //for brevity
-                int prev = remaining[i - 1];
-                int curr = remaining[i   < rem ? i   : i-rem];
+                int prev = remaining[i-1 >= 0  ? i-1 : rem-1];
+                int curr = remaining[i];
                 int next = remaining[i+1 < rem ? i+1 : i+1-rem];
 
-                if(counter_clockwise_is_convex(xs, ys, prev, curr, next))
+                if(cross_product_z(xs, ys, prev, curr, next) > 0)
                 {
                     //check intersections with all points (not prev,curr,next)
                     boolean contains_no_other_points = true;
                     for(int k = 0; k < indices.length; k += 1)
                     {
-                        if(is_in_triangle_interior(xs, ys, prev, curr, next, indices.at(k)))
-                        {
-                            contains_no_other_points = false;
-                            break;
+                        int vert = indices.at(k);
+                        if(vert != prev && vert != curr && vert != next) {
+                            if(is_in_triangle_with_boundary(xs, ys, prev, curr, next, vert))
+                            {
+                                contains_no_other_points = false;
+                                break;
+                            }
                         }
                     }
 
@@ -320,9 +323,10 @@ public final class Triangulate {
                         triangle_indices.push(curr);
                         triangle_indices.push(next);
 
-                        //remove arr[curr] by shifting remianing indices
+                        //remove arr[curr] by shifting remaining indices
                         for(int j = i; j < remaining_len - 1; j++)
                             remaining[j] = remaining[j + 1];
+
                         remaining_len -= 1;
 
                         did_remove = true;
@@ -408,17 +412,17 @@ public final class Triangulate {
             {
                 if(p1y*p2y <= 0)
                 {
-                    float cross = cross_product_z(p1x, p1y, p2x, p2y);
-                    float sign = p2y - p1y;
-                    if(sign != 0)
+                    if(Math.min(p1y, p2y) < 0)
                     {
+                        float cross = cross_product_z(p1x, p1y, p2x, p2y);
+                        float sign = p2y - p1y;
                         if(cross*sign >= 0) {
                             if(allow_boundary != POINT_IN_SHAPE_BOUNDARY_DONT_CARE && cross == 0)
                                 return allow_boundary == POINT_IN_SHAPE_WITH_BOUNDARY;
                             num_hits += 1;
                         }
                     }
-                    else if(allow_boundary != POINT_IN_SHAPE_BOUNDARY_DONT_CARE && p1x*p2x <= 0)
+                    else if(allow_boundary != POINT_IN_SHAPE_BOUNDARY_DONT_CARE && p1y == p2y && p1x*p2x <= 0)
                         return allow_boundary == POINT_IN_SHAPE_WITH_BOUNDARY;
                 }
             }
@@ -461,7 +465,7 @@ public final class Triangulate {
             {
                 if(p1y*p3y <= 0)
                 {
-                    if(p1y != p3y)
+                    if(Math.min(p1y, p2y) < 0)
                     {
                         //if is by convention linear segment use the more accurate and cheaper line intersection
                         if(p3x == p2x && p3y == p2y)
@@ -624,11 +628,6 @@ public final class Triangulate {
         //(cross product is orthogonal to both input vectors which are in XY plane)
         float cross_product_z = (x[b] - x[a])*(y[c] - y[a]) - (y[b] - y[a])*(x[c] - x[a]);
         return cross_product_z;
-    }
-
-    public static boolean counter_clockwise_is_convex(float[] x, float[] y, int a, int b, int c) 
-    {
-        return cross_product_z(x, y, a, b, c) >= 0;
     }
 
     public static boolean is_in_triangle_interior(float[] x, float[] y, int p0, int p1, int p2, int p)

@@ -29,6 +29,12 @@ public class Main {
     float rotation = 0;
     float dt = 0;
 
+    static final int EFFECT_NORMAL = 0;
+    static final int EFFECT_RAINBOW = 1;
+    static final int EFFECT_SKELETON = 2;
+    static final int EFFECT_TRIANGLES = 3;
+    int effect_state = EFFECT_NORMAL;
+
     static float ZOOM_SPEED_KEY = 2;
     static float ZOOM_SPEED_SCROLL = 2;
     static float CAMERA_SPEED = 2;
@@ -555,58 +561,6 @@ public class Main {
         return out;
     }
 
-    public static class Triangulated_Glyph
-    {
-        public Buffers.IndexBuffer[] connected_solids;
-        public Buffers.IndexBuffer triangles;
-        public Buffers.IndexBuffer convex_beziers;
-        public Buffers.IndexBuffer concave_beziers;
-    }
-
-    public static Triangulated_Glyph triangulate_glyph(Processed_Glyph glyph)
-    {
-        Buffers.IndexBuffer triangles = new Buffers.IndexBuffer();
-        Buffers.IndexBuffer convex_beziers = new Buffers.IndexBuffer();
-        Buffers.IndexBuffer concave_beziers = new Buffers.IndexBuffer();
-
-        //split into polygonal and bezier part
-        Buffers.IndexBuffer[] polygon_holes = new Buffers.IndexBuffer[glyph.holes_count];
-        Buffers.IndexBuffer[] polygon_solids = new Buffers.IndexBuffer[glyph.solids_count];
-        {
-            int solid_count = 0;
-            int hole_count = 0;
-            for(int k = 0; k < glyph.shapes.length; k++)
-            {
-                Buffers.IndexBuffer shape = glyph.shapes[k];
-                Buffers.IndexBuffer polygon = new Buffers.IndexBuffer();
-                polygon.reserve(shape.length/2);
-                Triangulate.bezier_contour_classify(polygon, convex_beziers, concave_beziers, glyph.points.xs, glyph.points.ys, shape, (float) 1e-5, true);
-
-                if(glyph.are_solid[k])
-                    polygon_solids[solid_count++] = polygon;
-                else
-                    polygon_holes[hole_count++] = polygon;
-            }
-        }
-
-        //connect solids with holes
-        Buffers.IndexBuffer[] connected_solids = new Buffers.IndexBuffer[glyph.solids_count];
-        for(int k = 0; k < glyph.solids_count; k++)
-        {
-            connected_solids[k] = new Buffers.IndexBuffer();
-            Triangulate.connect_holes(connected_solids[k], glyph.points.xs, glyph.points.ys, polygon_solids[k], polygon_holes, null);
-        }
-
-        for (Buffers.IndexBuffer connected : connected_solids)
-            Triangulate.triangulate(triangles, glyph.points.xs, glyph.points.ys, connected, true);
-
-        Triangulated_Glyph out = new Triangulated_Glyph();
-        out.connected_solids = connected_solids;
-        out.triangles = triangles;
-        out.concave_beziers = concave_beziers;
-        out.convex_beziers = convex_beziers;
-        return out;
-    }
 
     public static class Kept_Glyph
     {
@@ -643,9 +597,46 @@ public class Main {
 
             //process and triangulate
             Processed_Glyph processed = preprocess_glyph(glyph, font.units_per_em);
-            if(glyph.unicode == "h".codePointAt(0))
+            if(glyph.unicode == "#".codePointAt(0))
                 log("!");
-            Triangulated_Glyph triangulated = triangulate_glyph(processed);
+
+            System.out.println(STR."Processing '\{new StringBuilder().appendCodePoint(glyph.unicode)}'");
+
+            //triangulate glyph
+            Buffers.IndexBuffer triangles = new Buffers.IndexBuffer();
+            Buffers.IndexBuffer convex_beziers = new Buffers.IndexBuffer();
+            Buffers.IndexBuffer concave_beziers = new Buffers.IndexBuffer();
+
+            //split into polygonal and bezier part
+            Buffers.IndexBuffer[] polygon_holes = new Buffers.IndexBuffer[processed.holes_count];
+            Buffers.IndexBuffer[] polygon_solids = new Buffers.IndexBuffer[processed.solids_count];
+            {
+                int solid_count = 0;
+                int hole_count = 0;
+                for(int k = 0; k < processed.shapes.length; k++)
+                {
+                    Buffers.IndexBuffer shape = processed.shapes[k];
+                    Buffers.IndexBuffer polygon = new Buffers.IndexBuffer();
+                    polygon.reserve(shape.length/2);
+                    Triangulate.bezier_contour_classify(polygon, convex_beziers, concave_beziers, processed.points.xs, processed.points.ys, shape, (float) 1e-5, true);
+
+                    if(processed.are_solid[k])
+                        polygon_solids[solid_count++] = polygon;
+                    else
+                        polygon_holes[hole_count++] = polygon;
+                }
+            }
+
+            //connect solids with holes
+            Buffers.IndexBuffer[] connected_solids = new Buffers.IndexBuffer[processed.solids_count];
+            for(int k = 0; k < processed.solids_count; k++)
+            {
+                connected_solids[k] = new Buffers.IndexBuffer();
+                Triangulate.connect_holes(connected_solids[k], processed.points.xs, processed.points.ys, polygon_solids[k], polygon_holes, null);
+            }
+
+            for (Buffers.IndexBuffer connected : connected_solids)
+                Triangulate.triangulate(triangles, processed.points.xs, processed.points.ys, connected, true);
 
             //submit into centralized buffer
             int solids_color = 0x00;
@@ -654,14 +645,14 @@ public class Main {
                     | Render.Bezier_Buffer.FLAG_INVERSE;
 
             int triangulated_from = out.glyph_buffer.length;
-            out.glyph_buffer.submit_indexed_triangles(processed.points.xs, processed.points.ys, triangulated.triangles, solids_color, 0, null);
-            out.glyph_buffer.submit_indexed_triangles(processed.points.xs, processed.points.ys, triangulated.convex_beziers, solids_color, convex_flags, null);
-            out.glyph_buffer.submit_indexed_triangles(processed.points.xs, processed.points.ys, triangulated.concave_beziers, solids_color, concave_flags, null);
+            out.glyph_buffer.submit_indexed_triangles(processed.points.xs, processed.points.ys, triangles, solids_color, 0, null);
+            out.glyph_buffer.submit_indexed_triangles(processed.points.xs, processed.points.ys, convex_beziers, solids_color, convex_flags, null);
+            out.glyph_buffer.submit_indexed_triangles(processed.points.xs, processed.points.ys, concave_beziers, solids_color, concave_flags, null);
 
             //create kept and store
             Kept_Glyph kept = new Kept_Glyph();
             kept.processed = processed;
-            kept.connected_solids = triangulated.connected_solids;
+            kept.connected_solids = connected_solids;
             kept.triangulated_from = triangulated_from;
             kept.triangulated_to = out.glyph_buffer.length;
             out.glyphs.put(glyph.unicode, kept);
@@ -718,7 +709,13 @@ public class Main {
                     if(style.transform != null)
                         font.temp_matrix.mulLocal(style.transform);
 
+                    int from = buffer.length;
                     buffer.submit_buffer(font.glyph_buffer, glyph.triangulated_from, glyph.triangulated_to, font.temp_matrix, true, style.color);
+                    int to = buffer.length;
+
+                    if((style.flags & Text_Style.FLAG_SHOW_TRIANGLES) != 0)
+                        buffer.transform_to_rand_colors(from, to, 0, style.color >>> 24);
+
                     if(style.outline_width > 0)
                     {
                         var outline = outline_cache.get(style.font_index, glyph.processed.unicode, style.outline_width, style.outline_sharpness, 0.001f);
@@ -925,7 +922,8 @@ public class Main {
 //                    ui_buffer.submit_circle(0, 0, 1, 0xFF, null);
 //                if(false)
                 curr_style.set_default();
-                curr_style.set_outline((float) 3*(int)oscilate(0, 5, thisTime*1e-9)/1000, 0.75f, 0xFF);
+//                curr_style.set_outline((float) 3*(int)oscilate(0, 5, thisTime*1e-9)/1000, 0.75f, 0xFF);
+                curr_style.flags |= Text_Style.FLAG_SHOW_TRIANGLES;
 //                curr_style.spacing_x = 0.01f;
 
                     submit_styled_text(0, 0, glyph_buffer, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ", curr_style);

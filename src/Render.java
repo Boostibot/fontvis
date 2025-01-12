@@ -171,6 +171,32 @@ public class Render {
             }
         }
 
+        public void transform_to_rand_colors(int from, int to, long seed, int transparency)
+        {
+            int start = from*FLOATS_PER_SEGMENT;
+            int end = to*FLOATS_PER_SEGMENT;
+
+            long rand_state = seed;
+            for(int i = start; i < end; i += FLOATS_PER_SEGMENT)
+            {
+                long rand = 0;
+                //splitmix random
+                {
+                    rand_state += 0x9e3779b97f4a7c15L;
+                    long z = rand_state;
+                    z = (z ^ (z >>> 30)) * 0xbf58476d1ce4e5b9L;
+                    z = (z ^ (z >>> 27)) * 0x94d049bb133111ebL;
+                    rand = z ^ (z >>> 31);
+                }
+
+                int color = (int) (transparency << 24) | (int) (rand >>> (64 - 24));
+
+                buffer[i + 0*FLOATS_PER_VERTEX + 4] = Float.intBitsToFloat(color);
+                buffer[i + 1*FLOATS_PER_VERTEX + 4] = Float.intBitsToFloat(color);
+                buffer[i + 2*FLOATS_PER_VERTEX + 4] = Float.intBitsToFloat(color);
+            }
+        }
+
         public void recolor(int from, int to, int color)
         {
             transform(from, to, null, true, color);
@@ -1056,7 +1082,6 @@ public class Render {
                         color, flags, null);
             }
         }
-
     }
 
     public static final class Quadratic_Bezier_Render {
