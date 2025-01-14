@@ -21,6 +21,7 @@ public final class Font_Parser {
         public int[] contour_ends;
 
         public int unicode;
+        public int index;
         public int advance_width;     //how much to advance after this glyph
         public int left_side_bearing; //space before the glyph
 
@@ -461,6 +462,7 @@ public final class Font_Parser {
                 Glyph_Map mapping = glyph_pairs.get(i);
                 Glyph glyph = read_glyph_data(buffer, offset, glyph_locations, (int) mapping.glyph_index, (int) mapping.unicode_index, logs, 0);
                 glyph.unicode = (int) mapping.unicode_index;
+                glyph.index = (int) mapping.glyph_index;
                 glyphs[i] = glyph;
             }
         }
@@ -844,7 +846,6 @@ public final class Font_Parser {
 
     static public short read_u8(ByteBuffer buffer, Ref<Integer> offset)
     {
-//        short out = (short) Byte.toUnsignedInt(buffer.get(offset.val));
         short out = (short) buffer.get(offset.val);
         if(out < 0)
             out += 256;

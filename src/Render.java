@@ -197,6 +197,35 @@ public class Render {
             }
         }
 
+        public void transform_wave(int from, int to,
+            float period_x, float phase_x, float amplitude_x,
+            float period_y, float phase_y, float amplitude_y
+            )
+        {
+            int start = from*FLOATS_PER_SEGMENT;
+            int end = to*FLOATS_PER_SEGMENT;
+            for(int i = start; i < end; i += FLOATS_PER_SEGMENT)
+            {
+                float x1 = buffer[i + 0*FLOATS_PER_VERTEX + 0];
+                float y1 = buffer[i + 0*FLOATS_PER_VERTEX + 1];
+
+                float x2 = buffer[i + 1*FLOATS_PER_VERTEX + 0];
+                float y2 = buffer[i + 1*FLOATS_PER_VERTEX + 1];
+
+                float x3 = buffer[i + 2*FLOATS_PER_VERTEX + 0];
+                float y3 = buffer[i + 2*FLOATS_PER_VERTEX + 1];
+
+                buffer[i + 0*FLOATS_PER_VERTEX + 0] = x1 + (float) Math.sin(y1*period_x + phase_x)*amplitude_x;
+                buffer[i + 0*FLOATS_PER_VERTEX + 1] = y1 + (float) Math.sin(x1*period_y + phase_y)*amplitude_y;
+
+                buffer[i + 1*FLOATS_PER_VERTEX + 0] = x2 + (float) Math.sin(y2*period_x + phase_x)*amplitude_x;
+                buffer[i + 1*FLOATS_PER_VERTEX + 1] = y2 + (float) Math.sin(x2*period_y + phase_y)*amplitude_y;
+
+                buffer[i + 2*FLOATS_PER_VERTEX + 0] = x3 + (float) Math.sin(y3*period_x + phase_x)*amplitude_x;
+                buffer[i + 2*FLOATS_PER_VERTEX + 1] = y3 + (float) Math.sin(x3*period_y + phase_y)*amplitude_y;
+            }
+        }
+
         public void recolor(int from, int to, int color)
         {
             transform(from, to, null, true, color);
