@@ -17,7 +17,7 @@ A TrueType font renderer using the method given in [GPU Gems - Chapter 25. Rende
 
 | Skeleton | Triangulization | Resulting shape |
 |--------------|------------|----------------|
-| ![skeleton](assets/screenshots/mode_skeleton.png "skeleton") | ![trinagulizatoon](assets/screenshots/mode_triangle.png "triangulization") | ![resulting glyph](assets/screenshots/mode_triangle.png "resulting glyph") |
+| ![skeleton](assets/screenshots/mode_skeleton.png "skeleton") | ![trinagulizatoon](assets/screenshots/mode_triangle.png "triangulization") | ![resulting glyph](assets/screenshots/mode_default.png "resulting glyph") |
 
 # Small text
 ![small text](assets/screenshots/small.png "small text")
@@ -34,6 +34,8 @@ Finally everything is converted into triangles and sent to the GPU like any othe
 All of this is done analytically with zero overdraw. This works fine for relatively simple shapes and/or slim outlines. As soon one increases the width, the outline can start overdrawing iteself. 
 As an simple example imagine adding thicker outline around the letter C. At some point the entire inner region will fill up with the outline and the letter becomes sort of O-shaped. This is essentially
 what is happening when overdraw is observed except usually on far smaller scale. To see overdraw of outlines use `mode:transparent`.
+
+![overdraw](assets/screenshots/overdraw.png "overdraw")
 
 Is this a good approach - no, for most things not. Calculating the outline and its joints is expensive and overdraw cannot reasonably be prevented. 
 It would be better to simply draw in monochrome to some offscreen buffer, fully accepting overdaw and then draw this rasterized outline to the screen using the desired color.
