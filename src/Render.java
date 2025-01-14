@@ -226,6 +226,42 @@ public class Render {
             }
         }
 
+        public void transform_to_rainbow_colors(int from, int to,
+            Colorspace temp, float saturation, float lightness,
+            float period_x, float period_y, float phase)
+        {
+            int start = from*FLOATS_PER_SEGMENT;
+            int end = to*FLOATS_PER_SEGMENT;
+
+            for(int i = start; i < end; i += FLOATS_PER_SEGMENT)
+            {
+                float x1 = buffer[i + 0*FLOATS_PER_VERTEX + 0];
+                float y1 = buffer[i + 0*FLOATS_PER_VERTEX + 1];
+
+                float x2 = buffer[i + 1*FLOATS_PER_VERTEX + 0];
+                float y2 = buffer[i + 1*FLOATS_PER_VERTEX + 1];
+
+                float x3 = buffer[i + 2*FLOATS_PER_VERTEX + 0];
+                float y3 = buffer[i + 2*FLOATS_PER_VERTEX + 1];
+
+                float h1 = (phase + (float)Math.sin(x1*period_x) + (float)Math.sin(y1*period_y + 0.7f)) % 1;
+                float h2 = (phase + (float)Math.sin(x2*period_x) + (float)Math.sin(y2*period_y + 0.7f)) % 1;
+                float h3 = (phase + (float)Math.sin(x3*period_x) + (float)Math.sin(y3*period_y + 0.7f)) % 1;
+
+                int c1 = temp.hsv_to_rgb(h1 % 1, saturation, lightness).to_hex();
+                int c2 = temp.hsv_to_rgb(h2 % 1, saturation, lightness).to_hex();
+                int c3 = temp.hsv_to_rgb(h3 % 1, saturation, lightness).to_hex();
+
+                buffer[i + 0*FLOATS_PER_VERTEX + 4] = Float.intBitsToFloat(c1);
+                buffer[i + 1*FLOATS_PER_VERTEX + 4] = Float.intBitsToFloat(c2);
+                buffer[i + 2*FLOATS_PER_VERTEX + 4] = Float.intBitsToFloat(c3);
+
+                buffer[i + 0*FLOATS_PER_VERTEX + 5] = Float.intBitsToFloat(Float.floatToIntBits(buffer[i + 0*FLOATS_PER_VERTEX + 5]) | FLAG_OKLAB);
+                buffer[i + 1*FLOATS_PER_VERTEX + 5] = Float.intBitsToFloat(Float.floatToIntBits(buffer[i + 1*FLOATS_PER_VERTEX + 5]) | FLAG_OKLAB);
+                buffer[i + 2*FLOATS_PER_VERTEX + 5] = Float.intBitsToFloat(Float.floatToIntBits(buffer[i + 2*FLOATS_PER_VERTEX + 5]) | FLAG_OKLAB);
+            }
+        }
+
         public void recolor(int from, int to, int color)
         {
             transform(from, to, null, true, color);
@@ -811,31 +847,59 @@ public class Render {
                     // distance along h from the origin. That is |proj_{-h} B| = s
                     // s = B.-h / |h|. factor out gamma to get the following code.
                     // The same for B' using v instead of u.
-                    //Note that A.B
+                    //Note that A.h = beta
                     float u_dot_h = ux*hx + uy*hy;
                     float v_dot_h = vx*hx + vy*hy;
-                    float u_gamma = (beta - sharp_corner_height)/u_dot_h;
-                    float v_gamma = (beta - sharp_corner_height)/v_dot_h;
 
-                    connection.u_side_x1 = Ax;
-                    connection.u_side_y1 = Ay;
-                    connection.u_side_x2 = -Ax + ux*u_gamma;
-                    connection.u_side_y2 = -Ay + uy*u_gamma;
+                    //again if you are smarter than me then you can figure out how
+                    // to compress this down. I am lazy and just did an if, and fiddled
+                    // until it worked
+                    if(beta > 0)
+                    {
+                        float u_gamma = (beta - sharp_corner_height)/u_dot_h;
+                        float v_gamma = (beta - sharp_corner_height)/v_dot_h;
 
-                    connection.v_side_x1 = Ax;
-                    connection.v_side_y1 = Ay;
-                    connection.v_side_x2 = -Ax + vx*v_gamma;
-                    connection.v_side_y2 = -Ay + vy*v_gamma;
+                        connection.u_side_x1 = Ax;
+                        connection.u_side_y1 = Ay;
+                        connection.u_side_x2 = -Ax + ux*u_gamma;
+                        connection.u_side_y2 = -Ay + uy*u_gamma;
+
+                        connection.v_side_x1 = Ax;
+                        connection.v_side_y1 = Ay;
+                        connection.v_side_x2 = -Ax + vx*v_gamma;
+                        connection.v_side_y2 = -Ay + vy*v_gamma;
+                        connection.primitive_x1 = connection.v_side_x2;
+                        connection.primitive_y1 = connection.v_side_y2;
+                        connection.primitive_x2 = connection.u_side_x2;
+                        connection.primitive_y2 = connection.u_side_y2;
+                        connection.primitive_x3 = connection.v_side_x1;
+                        connection.primitive_y3 = connection.v_side_y1;
+                    }
+                    else
+                    {
+                        float u_gamma = (beta + sharp_corner_height)/u_dot_h;
+                        float v_gamma = (beta + sharp_corner_height)/v_dot_h;
+
+                        connection.u_side_x1 = Ax - ux*u_gamma;
+                        connection.u_side_y1 = Ay - uy*u_gamma;
+                        connection.u_side_x2 = -Ax;
+                        connection.u_side_y2 = -Ay;
+
+                        connection.v_side_x1 = Ax - vx*v_gamma;
+                        connection.v_side_y1 = Ay - vy*v_gamma;
+                        connection.v_side_x2 = -Ax;
+                        connection.v_side_y2 = -Ay;
+
+                        connection.primitive_x1 = connection.v_side_x1;
+                        connection.primitive_y1 = connection.v_side_y1;
+                        connection.primitive_x2 = connection.u_side_x1;
+                        connection.primitive_y2 = connection.u_side_y1;
+                        connection.primitive_x3 = connection.v_side_x2;
+                        connection.primitive_y3 = connection.v_side_y2;
+                    }
 
                     connection.has_circle = false;
                     connection.has_primitive = true;
-                    connection.primitive_x1 = connection.v_side_x2;
-                    connection.primitive_y1 = connection.v_side_y2;
-                    connection.primitive_x2 = connection.u_side_x2;
-                    connection.primitive_y2 = connection.u_side_y2;
-                    connection.primitive_x3 = Ax;
-                    connection.primitive_y3 = Ay;
-
                     //no need to set uvs because is simple triangle
                 }
                 //Sharp corner

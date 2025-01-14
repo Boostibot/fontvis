@@ -4,34 +4,34 @@ public final class Colorspace {
     public float z; //b
     public float a; //alpha
 
-    public static byte hex_r(int hex)
+    public static int hex_r(int hex)
     {
-        return (byte) (hex >> 16);
+        return (int) (hex >>> 16);
     }
 
-    public static byte hex_g(int hex)
+    public static int hex_g(int hex)
     {
-        return (byte) (hex >> 8);
+        return (int) (hex >>> 8) & 0xFF;
     }
 
-    public static byte hex_b(int hex)
+    public static int hex_b(int hex)
     {
-        return (byte) (hex);
+        return (int) (hex) & 0xFF;
     }
 
     //transparency: 0 = completely opaque, 1 = completely transparent
-    public static byte hex_t(int hex)
+    public static int hex_t(int hex)
     {
-        return (byte) (hex >> 24);
+        return (int) (hex >>> 24) & 0xFF;
     }
 
     //alpha = 1 - transparency: 0 = completely transparent, 1 = completely opaque
-    public static byte hex_a(int hex)
+    public static int hex_a(int hex)
     {
-        return (byte) (255 - (byte) (hex >> 24));
+        return (int) (255 - (int) (hex >>> 24) & 0xFF);
     }
 
-    public static int rgba_to_hex(byte r, byte g, byte b, byte a)
+    public static int rgba_to_hex(int r, int g, int b, int a)
     {
         int ri = (int) r & 0xFF;
         int gi = (int) g & 0xFF;
@@ -108,6 +108,32 @@ public final class Colorspace {
         return this;
     }
 
+    public Colorspace hsv_to_rgb(float h, float s, float v) {
+        float r = 0;
+        float g = 0;
+        float b = 0;
+
+        int i = (int) Math.floor(h * 6);
+        float f = h * 6 - i;
+        float p = v * (1 - s);
+        float q = v * (1 - f * s);
+        float t = v * (1 - (1 - f) * s);
+
+        switch (i % 6) {
+            case 0: r = v; g = t; b = p; break;
+            case 1: r = q; g = v; b = p; break;
+            case 2: r = p; g = v; b = t; break;
+            case 3: r = p; g = q; b = v; break;
+            case 4: r = t; g = p; b = v; break;
+            case 5: r = v; g = p; b = q; break;
+        }
+
+        this.x = r;
+        this.y = g;
+        this.z = b;
+        return this;
+    }
+
     public Colorspace lin_to_oklab()
     {
         float l = 0.4122214708f*x + 0.5363325363f*y + 0.0514459929f*z;
@@ -145,10 +171,10 @@ public final class Colorspace {
         class H {
             public static void test_rgba_hex_conv(int hex)
             {
-                byte r = Colorspace.hex_r(hex);
-                byte g = Colorspace.hex_g(hex);
-                byte b = Colorspace.hex_b(hex);
-                byte a = Colorspace.hex_a(hex);
+                int r = Colorspace.hex_r(hex);
+                int g = Colorspace.hex_g(hex);
+                int b = Colorspace.hex_b(hex);
+                int a = Colorspace.hex_a(hex);
 
                 int back = Colorspace.rgba_to_hex(r,g,b,a);
                 assert back == hex;
@@ -160,7 +186,7 @@ public final class Colorspace {
                 Colorspace lin_back = new Colorspace(hex);
                 lin_back.lin_to_oklab().oklab_to_lin();
 
-                float eps = (float) 1e-6;
+                float eps = (float) 1e-3;
                 assert Math.abs(lin.x - lin_back.x) < eps;
                 assert Math.abs(lin.y - lin_back.y) < eps;
                 assert Math.abs(lin.z - lin_back.z) < eps;

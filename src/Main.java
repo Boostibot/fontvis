@@ -28,12 +28,14 @@ public class Main {
     float rotation = 0;
     float dt = 0;
 
-    static final String DEFAULT_FONT_FILE = "./assets/fonts/Roboto/Roboto-Regular.ttf";
+    static final String DEFAULT_FONT_FILE = "./assets/fonts/Roboto/Roboto-Medium.ttf";
     static float ZOOM_SPEED_KEY = 2;
     static float ZOOM_SPEED_SCROLL = 2;
     static float CAMERA_SPEED = 2;
     static float SPRINT_CAMERA_SPEED = 10;
     static float ROTATE_SPEED = 1;
+
+    static int BACKGROUND_COLOR = 0xF5F5F5;
 
     final Vector3f position = new Vector3f(0, 0, 0);
     boolean[] keyDown = new boolean[GLFW_KEY_LAST + 1];
@@ -78,7 +80,7 @@ public class Main {
             set_default();
         }
 
-        public void set_default()
+        public Text_Style set_default()
         {
             font_index = 0;
             font_gen = 0;
@@ -94,9 +96,10 @@ public class Main {
             flags = 0;
             if(transform != null)
                 transform.identity();
+            return this;
         }
 
-        public void set(Text_Style other)
+        public Text_Style set(Text_Style other)
         {
             font_index = other.font_index;
             font_gen = other.font_gen;
@@ -123,13 +126,27 @@ public class Main {
                 if(other.transform != null)
                     transform = new Matrix3f(other.transform);
             }
+            return this;
         }
 
-        public void set_outline(float width, float sharpness, int color)
+        public Text_Style set_outline(float width, float sharpness, int color)
         {
             outline_width = width;
             outline_sharpness = sharpness;
             outline_color = color;
+            return this;
+        }
+
+        public Text_Style set_size(float size)
+        {
+            this.size = size;
+            return this;
+        }
+
+        public Text_Style set_color(int color)
+        {
+            this.color = color;
+            return this;
         }
     }
 
@@ -186,7 +203,11 @@ public class Main {
         Matrix3f temp_matrix = new Matrix3f();
     }
 
-    public Text_Style temp_text_style = new Text_Style();
+    static float RAINBOW_FILL_PERIOD_X = 16f;
+    static float RAINBOW_FILL_PERIOD_Y = 8f;
+    static float RAINBOW_FILL_SPEED = 0.2f;
+
+    Colorspace RAINBOW_FILL_TEMP_COLORSPACE = new Colorspace(0x0);
     public boolean submit_styled_text(float x, float y, float width, float height, Render.Bezier_Buffer buffer, CharSequence text, Text_Style style)
     {
         if(style == null)
@@ -197,6 +218,7 @@ public class Main {
 
         Font font = fonts.get(style.font_index);
 
+        float now = (float) (System.nanoTime()*1e-9);
         float line_height = (float) font.parsed.line_gap/font.parsed.units_per_em;
         float curr_x = 0;
         float curr_y = 0;
@@ -204,7 +226,7 @@ public class Main {
         float scaled_height = height/style.size;
         for(int c : text.codePoints().toArray()){
             Kept_Glyph glyph = font.glyphs.getOrDefault(c, font.missing_glyph);
-            if(c != '\r' && c != 'v')
+            if(c != '\r')
             {
                 if(glyph == font.missing_glyph)
                     if(spaced_print())
@@ -239,12 +261,22 @@ public class Main {
                     if((style.flags & Text_Style.FLAG_SHOW_TRIANGLES) != 0)
                         buffer.transform_to_rand_colors(from, to, 0, style.color >>> 24);
 
+                    if((style.flags & Text_Style.FLAG_RAINBOW_FILL) != 0)
+                        buffer.transform_to_rainbow_colors(from, to, RAINBOW_FILL_TEMP_COLORSPACE, 1, 1, RAINBOW_FILL_PERIOD_X, RAINBOW_FILL_PERIOD_Y, RAINBOW_FILL_SPEED*now);
+
+                    if(style.outline_width > 0)
+                    {
+                        var outline = outline_cache.get(style.font_index, glyph.processed.unicode, style.outline_width, style.outline_sharpness, 0.001f);
+                        if(outline != null)
+                            buffer.submit_buffer(outline, font.temp_matrix, true, style.outline_color);
+                    }
+
                     if((style.flags & Text_Style.FLAG_SHOW_SKELETON) != 0)
                     {
-                        float r = 0.005f;
+                        float r = 0.007f;
                         for(var solid : glyph.connected_solids)
                         {
-                            int color = 0xFF0000;
+                            int color = CONTENT_SKELETON_COLOR;
                             float[] xs = glyph.processed.points.xs;
                             float[] ys = glyph.processed.points.ys;
                             int j = solid.length - 1;
@@ -260,16 +292,8 @@ public class Main {
                         }
                     }
 
-                    if(style.outline_width > 0)
-                    {
-                        var outline = outline_cache.get(style.font_index, glyph.processed.unicode, style.outline_width, style.outline_sharpness, 0.001f);
-                        if(outline != null)
-                            buffer.submit_buffer(outline, font.temp_matrix, true, style.outline_color);
-                    }
-
                     if((style.flags & Text_Style.FLAG_DANCING) != 0) {
                         to = buffer.length;
-                        float now = (float) (System.nanoTime()*1e-9);
                         buffer.transform_wave(from, to, 80f, 4*now, 0.005f, 80f, now, 0.005f);
                     }
                 }
@@ -286,12 +310,36 @@ public class Main {
         return submit_styled_text(x, y, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY, buffer, text, style);
     }
 
-    public static final int BUTTON_FILL_COLOR = 0xCCCCCC;
-    public static final int BUTTON_HOVER_COLOR = 0xCCCCFF;
-    public static final int BUTTON_OUTLINE_COLOR = 0x999999;
+    public static final int CONTENT_OUTLINE_COLOR = 0xe60049;
+    public static final int CONTENT_TEXT_COLOR = 0x000000;
+    public static final int CONTENT_SKELETON_COLOR = 0x00FF00;
+
+//    //orange
+//    public static final int BUTTON_FILL_COLOR = 0xd17000;
+//    public static final int BUTTON_HOVER_COLOR = 0xff8800;
+//    public static final int BUTTON_OUTLINE_COLOR = 0xb56100;
+//    public static final int BUTTON_TEXT_COLOR = 0xFFFFFF;
+
+    //blue
+    public static final int BUTTON_FILL_COLOR = 0x00;
+    public static final int BUTTON_HOVER_COLOR = 0xff8800;
+    public static final int BUTTON_OUTLINE_COLOR = BACKGROUND_COLOR;
+    public static final int BUTTON_TEXT_COLOR = 0xFFFFFF;
+//    public static final int BUTTON_FILL_COLOR = BACKGROUND_COLOR;
+//    public static final int BUTTON_HOVER_COLOR = 0xff8800;
+//    public static final int BUTTON_OUTLINE_COLOR = 0x333333;
+//    public static final int BUTTON_TEXT_COLOR = 0x00;
+
+//
+//    public static final int BUTTON_FILL_COLOR = 0xe60049;
+//    public static final int BUTTON_HOVER_COLOR = 0xff8800;
+//    public static final int BUTTON_OUTLINE_COLOR = 0xb56100;
+//    public static final int BUTTON_TEXT_COLOR = 0xFFFFFF;
+
     public static final float BUTTON_CORNER_RADIUS = 0.0f;
     public static final float BUTTON_OUTLINE_WIDTH = 0.005f;
     public static final Matrix3f BUTTON_TRANSFORM = null;
+    public static final Text_Style BUTTON_TEXT_STYLE = new Text_Style().set_color(BUTTON_TEXT_COLOR).set_outline(0.006f, 1, BUTTON_TEXT_COLOR);
     public boolean do_button(float x, float y, CharSequence text, float width, float height)
     {
         boolean out = false;
@@ -313,7 +361,7 @@ public class Main {
 
         submit_styled_text(
             x - width/2 + pad, y - pad,
-            ui_buffer, text, UI_TEXT_STYLE
+            ui_buffer, text, BUTTON_TEXT_STYLE
         );
         return out;
     }
@@ -415,7 +463,7 @@ public class Main {
         Matrix4f ui_view_matrix = new Matrix4f();
         Matrix4f model_matrix = new Matrix4f();
 
-        Colorspace clear_color = new Colorspace(0.9f, 0.9f, 0.9f).srgb_to_lin();
+        Colorspace clear_color = new Colorspace(BACKGROUND_COLOR).srgb_to_lin();
         glfwShowWindow(window);
         long lastTime = System.nanoTime();
 
@@ -524,7 +572,8 @@ public class Main {
 
                 curr_style.set_default();
                 curr_style.outline_width = outline_width;
-                curr_style.outline_color = 0xFF;
+                curr_style.outline_color = CONTENT_OUTLINE_COLOR;
+                curr_style.color = CONTENT_TEXT_COLOR;
 
                 String mode_mode_name = "";
                 if(outline_i == 0) {
@@ -532,12 +581,12 @@ public class Main {
                     mode_mode_name = "sharp";
                 }
                 else if(outline_i == 1) {
-                    curr_style.outline_sharpness = 0.5f;
+                    curr_style.outline_sharpness = 0.2f;
                     mode_mode_name = "cut";
                 }
                 else if(outline_i == 2) {
                     curr_style.outline_sharpness = -1;
-                    mode_mode_name = "rounded";
+                    mode_mode_name = "round";
                 }
 
                 if (second_bar.add_button(STR."Outline: \{mode_mode_name}"))
@@ -563,12 +612,11 @@ public class Main {
                     mode_name = "triangle";
                 }
                 else if(flags_i == 3) {
-                    curr_style.color = rainbow(thisTime*1e-9, 0.5f);
+                    curr_style.flags = Text_Style.FLAG_RAINBOW_FILL;
                     mode_name = "rainbow";
                 }
                 else if(flags_i == 4) {
-                    curr_style.color = (curr_style.color & 0xFFFFFF) | (0x88 << 24);
-                    curr_style.outline_color = (curr_style.outline_color & 0xFFFFFF) | (0x88 << 24);
+                    curr_style.outline_color = (curr_style.outline_color & 0xFFFFFF) | (0x33 << 24);
                     mode_name = "transparent";
                 }
 
@@ -593,16 +641,17 @@ public class Main {
                 if(move_dir.x != 0 || move_dir.y != 0)
                     position.add(move_dir.normalize().mul(dt * camera_speed/zoom));
 
-                submit_styled_text(1.2f, 0.9f, ui_buffer, String.format("dt:%.2f ms", (prev_end_frame - prev_start_frame)*1e-6), UI_TEXT_STYLE);
+                submit_styled_text(1.2f, 0.93f, ui_buffer, String.format("dt:%.2f ms", (prev_end_frame - prev_start_frame)*1e-6), UI_TEXT_STYLE);
 
                 view_position.set(position).mul(zoom);
                 view_matrix.identity().scaleXY((float) window_height / window_width, 1).rotateZ(rotation).translateLocal(view_position).scale(zoom);
                 ui_view_matrix.identity().scaleXY((float) window_height / window_width, 1);
-                glClearColor(clear_color.x, clear_color.y, clear_color.z, clear_color.a);
-                glClear(GL_COLOR_BUFFER_BIT);
+
 
                 glyph_buffer.reset();
-                submit_styled_text(0, 0, glyph_buffer, """
+                submit_styled_text(-0.3f, 0, glyph_buffer, """
+                    Fontvis
+                    
                     abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ
                     0123456789
                     ~!@#$%^&*()-_=+[]{};:\"'\\,.<>?/
@@ -638,6 +687,8 @@ public class Main {
                     mattis purus.\s
                     """, curr_style);
 
+                glClearColor(clear_color.x, clear_color.y, clear_color.z, clear_color.a);
+                glClear(GL_COLOR_BUFFER_BIT);
                 render.render(model_matrix, view_matrix, glyph_buffer);
                 render.render(model_matrix, ui_view_matrix, ui_buffer);
 
