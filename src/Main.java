@@ -685,6 +685,8 @@ public class Main {
                     vestibulum purus. Donec nec est efficitur, volutpat ligula id, tincidunt nunc. Sed\s
                     ultrices urna non mi laoreet, tincidunt ornare lacus pellentesque. Vestibulum eget\s
                     mattis purus.\s
+                    
+                    β
                     """, curr_style);
 
                 glClearColor(clear_color.x, clear_color.y, clear_color.z, clear_color.a);
