@@ -9,9 +9,12 @@ import java.util.ArrayList;
 import java.util.HashMap;
 
 import org.joml.*;
+import org.lwjgl.PointerBuffer;
 import org.lwjgl.glfw.GLFWVidMode;
 import org.lwjgl.opengl.*;
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.util.nfd.NFDFilterItem;
+import org.lwjgl.util.nfd.NativeFileDialog;
 
 //tomorrow:
 // fix that one bug
@@ -35,6 +38,7 @@ public class Main {
     static final int EFFECT_TRIANGLES = 3;
     int effect_state = EFFECT_NORMAL;
 
+    static final String DEFAULT_FONT_FILE = "./assets/fonts/Roboto/Roboto-Regular.ttf";
     static float ZOOM_SPEED_KEY = 2;
     static float ZOOM_SPEED_SCROLL = 2;
     static float CAMERA_SPEED = 2;
@@ -50,7 +54,7 @@ public class Main {
 
     Render.Quadratic_Bezier_Render render;
     Render.Bezier_Buffer ui_buffer = new Render.Bezier_Buffer(64*MB, false);
-    Render.Bezier_Buffer glyph_buffer = new Render.Bezier_Buffer(4*MB, false);
+    Render.Bezier_Buffer glyph_buffer = new Render.Bezier_Buffer(64*MB, false);
     Outline_Cache outline_cache = new Outline_Cache(16*MB);
 
     ArrayList<Font> fonts = new ArrayList<>();
@@ -100,10 +104,10 @@ public class Main {
             outline_width = 0;
             outline_sharpness = 0.7f;
             outline_color = 0;
-            spacing_x = 0;
-            spacing_y = 0;
-            spacing_scale_x = 1.1f;
-            spacing_scale_y = 1.1f;
+            spacing_x = 0.06f;
+            spacing_y = 1.05f;
+            spacing_scale_x = 1.0f;
+            spacing_scale_y = 1.0f;
             flags = 0;
             if(transform != null)
                 transform.identity();
@@ -162,7 +166,6 @@ public class Main {
         x = x ^ (x >>> 31);
         return x;
     }
-
 
     //TODO refactor
     static boolean print = true;
@@ -281,6 +284,22 @@ public class Main {
             staging_buffer = new Render.Bezier_Buffer(64*KB, true);
         }
 
+        public void evict_all()
+        {
+            while(bytes_count > 0)
+            {
+                if(last == null)
+                    break;
+
+                var unlinked = unlink(last);
+                bytes_count -= (long) unlinked.buffer.length*Render.Bezier_Buffer.BYTES_PER_SEGMENT;
+                unlinked.buffer.free_all();
+
+                outlines.remove(unlinked.key);
+                unlinked.next = freelist;
+                freelist = unlinked;
+            }
+        }
 
         public Render.Bezier_Buffer get(Outline_Cache_Key key)
         {
@@ -414,7 +433,6 @@ public class Main {
             return get(temp_key);
         }
     }
-
 
     public static class Processed_Glyph
     {
@@ -561,7 +579,6 @@ public class Main {
         return out;
     }
 
-
     public static class Kept_Glyph
     {
         public Processed_Glyph processed;
@@ -580,7 +597,6 @@ public class Main {
 
         Matrix3f temp_matrix = new Matrix3f();
     }
-
 
     public static boolean font_load(Font out, CharSequence sequence, ArrayList<Font_Parser.Font_Log> logs)
     {
@@ -667,7 +683,7 @@ public class Main {
     }
 
     public Text_Style temp_text_style = new Text_Style();
-    public boolean submit_styled_text(float x, float y, float max_x, float min_y, Render.Bezier_Buffer buffer, CharSequence text, Text_Style style)
+    public boolean submit_styled_text(float x, float y, float width, float height, Render.Bezier_Buffer buffer, CharSequence text, Text_Style style)
     {
         if(style == null)
             style = DEF_TEXT_STYLE;
@@ -678,8 +694,10 @@ public class Main {
         Font font = fonts.get(style.font_index);
 
         float line_height = (float) font.parsed.line_gap/font.parsed.units_per_em;
-        float curr_x = x;
-        float curr_y = y;
+        float curr_x = 0;
+        float curr_y = 0;
+        float scaled_width = width/style.size;
+        float scaled_height = height/style.size;
         for(int c : text.codePoints().toArray()){
             Kept_Glyph glyph = font.glyphs.getOrDefault(c, font.missing_glyph);
             if(c != '\r' && c != 'v')
@@ -692,20 +710,21 @@ public class Main {
                 float glyph_width = glyph.processed.aabb.x1 - glyph.processed.aabb.x0;
                 float advance_x = style.spacing_x + style.spacing_scale_x*glyph_width;// + glyph.processed.advance_width*style.spacing_scale_x;
 
-                if(curr_x + advance_x > max_x || c == '\n')
+                if(curr_x + advance_x > scaled_width || c == '\n')
                 {
                     curr_y += style.spacing_y + style.spacing_scale_y*line_height;
                     curr_x = 0;
+                    advance_x = 0;
                 }
-                if(curr_y < min_y)
+                if(curr_y < scaled_height)
                     break;
 
-                if(c != ' ' && c != '\t')
+                if(c != ' ' && c != '\t' && c != '\n' && c != '\r' && c != '\f')
                 {
                     font.temp_matrix.identity();
-                    font.temp_matrix.m21 = curr_y;
-                    font.temp_matrix.m20 = curr_x;
                     font.temp_matrix.scale(style.size);
+                    font.temp_matrix.m21 = y - curr_y*style.size;
+                    font.temp_matrix.m20 = x + curr_x*style.size;
                     if(style.transform != null)
                         font.temp_matrix.mulLocal(style.transform);
 
@@ -715,6 +734,27 @@ public class Main {
 
                     if((style.flags & Text_Style.FLAG_SHOW_TRIANGLES) != 0)
                         buffer.transform_to_rand_colors(from, to, 0, style.color >>> 24);
+
+                    if((style.flags & Text_Style.FLAG_SHOW_SKELETON) != 0)
+                    {
+                        float r = 0.005f;
+                        for(var solid : glyph.connected_solids)
+                        {
+                            int color = 0xFF0000;
+                            float[] xs = glyph.processed.points.xs;
+                            float[] ys = glyph.processed.points.ys;
+                            int j = solid.length - 1;
+                            for(int i = 0; i < solid.length; j = i, i++)
+                            {
+                                buffer.submit_line(
+                                        xs[solid.at(j)], ys[solid.at(j)],
+                                        xs[solid.at(i)], ys[solid.at(i)],
+                                        r, color, font.temp_matrix
+                                );
+                                buffer.submit_circle(xs[solid.at(j)], ys[solid.at(j)], r, color, font.temp_matrix);
+                            }
+                        }
+                    }
 
                     if(style.outline_width > 0)
                     {
@@ -736,47 +776,75 @@ public class Main {
         return submit_styled_text(x, y, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY, buffer, text, style);
     }
 
-    public static final int BUTTON_FILL_COLOR = 0xAAAAAA;
+    public static final int BUTTON_FILL_COLOR = 0xCCCCCC;
+    public static final int BUTTON_HOVER_COLOR = 0xCCCCFF;
     public static final int BUTTON_OUTLINE_COLOR = 0x999999;
     public static final int BUTTON_TEXT_COLOR = 0x111111;
-    public static final float BUTTON_CORNER_RADIUS = 0.05f;
+    public static final float BUTTON_CORNER_RADIUS = 0.0f;
     public static final float BUTTON_OUTLINE_WIDTH = 0.005f;
-    public static final Matrix3f BUTTON_TRANSFORM = new Matrix3f().identity().m10(0.1f); //slight sheer
+//    public static final Matrix3f BUTTON_TRANSFORM = new Matrix3f().identity().m10(0.1f); //slight sheer
+    public static final Matrix3f BUTTON_TRANSFORM = null;
     public boolean do_button(float x, float y, CharSequence text, float width, float height)
     {
-        float pad = 0.01f;
+        boolean out = false;
+        float norm_mouse_x = 2*((float) mouseX/window_width - 0.5f)*window_width/window_height;
+        float norm_mouse_y = -2*((float) mouseY/window_height - 0.5f);
+
+
+
+        int fill_color = BUTTON_FILL_COLOR;
+        if(x - width/2 <= norm_mouse_x && norm_mouse_x <= x + width/2)
+            if(y - height/2 <= norm_mouse_y && norm_mouse_y <= y + height/2)
+            {
+                fill_color = BUTTON_HOVER_COLOR;
+                if(panning)
+                    out = true;
+            }
+
+        float pad = 0.015f;
         ui_buffer.submit_rounded_rectangle(x, y, width + 2*BUTTON_OUTLINE_WIDTH, height+2*BUTTON_OUTLINE_WIDTH, BUTTON_CORNER_RADIUS, BUTTON_OUTLINE_COLOR, BUTTON_TRANSFORM);
-        ui_buffer.submit_rounded_rectangle(x, y, width, height, BUTTON_CORNER_RADIUS, BUTTON_FILL_COLOR, BUTTON_TRANSFORM);
+        ui_buffer.submit_rounded_rectangle(x, y, width, height, BUTTON_CORNER_RADIUS, fill_color, BUTTON_TRANSFORM);
 
         submit_styled_text(
-            x - width/2 + pad, y + height/2 - pad,
-            x + width/2 - pad, y - height/2 + pad,
+            x - width/2 + pad, y - pad,
             ui_buffer, text, UI_TEXT_STYLE
         );
+        return out;
+    }
 
-        float norm_mouse_x = (float) mouseX/window_width - 0.5f;
-        float norm_mouse_y = (float) mouseY/window_height - 0.5f;
-
-        if(x - width/2 <= norm_mouse_x && norm_mouse_x <= x + width/2)
-            if(y - width/2 <= norm_mouse_y && norm_mouse_y <= y + width/2)
-                return true;
-
-        return false;
+    boolean open_file(ArrayList<String> paths)
+    {
+        boolean out = false;
+        NativeFileDialog.NFD_Init();
+        try (MemoryStack stack = stackPush()) {
+            NFDFilterItem.Buffer filters = NFDFilterItem.malloc(1);
+            filters.get(0)
+                    .name(stack.UTF8("TrueType font file"))
+                    .spec(stack.UTF8("ttf"));
+            PointerBuffer pp = stack.mallocPointer(1);
+            int state = NativeFileDialog.NFD_OpenDialog(pp, filters, ".");
+            if(state == NativeFileDialog.NFD_OKAY) {
+                paths.add(pp.getStringUTF8(0));
+                out = true;
+            }
+        }
+        NativeFileDialog.NFD_Quit();
+        return out;
     }
 
     private void run() {
-
-        ArrayList<Font_Parser.Font_Log> logs = new ArrayList<>();
-
-        Font loaded = new Font();
-        boolean font_load_state = font_load(loaded, "./assets/fonts/Roboto/Roboto-Regular.ttf", logs);
-        for(var log : logs)
-            if(log.category.equals("info") == false && log.category.equals("debug") == false)
-                log(STR."FONT_PARSE \{log.category}: [\{log.table}] \{log.error}");
-        if(font_load_state == false)
-            throw new IllegalStateException("Unable to Read font file");
-
-        fonts.add(loaded);
+        //Load default font file
+        {
+            Font loaded = new Font();
+            ArrayList<Font_Parser.Font_Log> logs = new ArrayList<>();
+            boolean font_load_state = font_load(loaded, DEFAULT_FONT_FILE, logs);
+            for(var log : logs)
+                if(log.category.equals("info") == false && log.category.equals("debug") == false)
+                    log(STR."FONT_PARSE \{log.category}: [\{log.table}] \{log.error}");
+            if(font_load_state == false)
+                throw new IllegalStateException("Unable to Read font file");
+            fonts.add(loaded);
+        }
         if (!glfwInit())
             throw new IllegalStateException("Unable to initialize GLFW");
 
@@ -861,7 +929,7 @@ public class Main {
 
 
         Matrix4f view_matrix = new Matrix4f();
-        Matrix3f transf_matrix = new Matrix3f();
+        Matrix4f ui_view_matrix = new Matrix4f();
         Matrix4f model_matrix = new Matrix4f();
 
         Colorspace clear_color = new Colorspace(0.9f, 0.9f, 0.9f).srgb_to_lin();
@@ -872,6 +940,40 @@ public class Main {
         Vector3f view_position = new Vector3f();
         Text_Style curr_style = new Text_Style();
 
+        class Top_Bar {
+            float TOP_TRAY_Y = 0.95f;
+            float TOP_TRAY_X = -0.7f;
+            float TOP_TRAY_BUTTON_W = 0.3f;
+            float TOP_TRAY_BUTTON_H = 0.07f;
+            float TOP_TRAY_BUTTON_ADVANCE = TOP_TRAY_BUTTON_W + 0.05f;
+            float button_i = 0;
+            Top_Bar(float y)
+            {
+                TOP_TRAY_Y = y;
+            }
+
+            void reset()
+            {
+                button_i = 0;
+            }
+
+            boolean add_button(CharSequence text)
+            {
+                boolean out = do_button(TOP_TRAY_X + button_i*TOP_TRAY_BUTTON_ADVANCE, TOP_TRAY_Y, text, TOP_TRAY_BUTTON_W, TOP_TRAY_BUTTON_H);
+                button_i += 1;
+                return out;
+            }
+        }
+
+        Top_Bar first_bar = new Top_Bar(0.95f);
+        Top_Bar second_bar = new Top_Bar(0.85f);
+
+        int flags_i = 0;
+        float outline_width = 0;
+        float OUTLINE_WIDTH_SPEED = 0.01f;
+        long prev_mode_time = 0;
+        long prev_outline_mode_time = 0;
+        int outline_i = 0;
         while (!glfwWindowShouldClose(window)) {
 
             try (MemoryStack frame_stack = stackPush()) {
@@ -883,11 +985,15 @@ public class Main {
                 float camera_speed = CAMERA_SPEED;
                 glfwPollEvents();
                 move_dir.zero();
+
+                ui_buffer.reset();
+                first_bar.reset();
+                second_bar.reset();
                 if (keyDown[GLFW_KEY_LEFT_SHIFT])
                     camera_speed = SPRINT_CAMERA_SPEED;
-                if (keyDown[GLFW_KEY_Q])
+                if (keyDown[GLFW_KEY_Q] | first_bar.add_button("Rotate CW"))
                     rotation -= 1f * ROTATE_SPEED*dt;
-                if (keyDown[GLFW_KEY_E])
+                if (keyDown[GLFW_KEY_E] | first_bar.add_button("Rotate CCW"))
                     rotation += 1f * ROTATE_SPEED*dt;
 
                 if (keyDown[GLFW_KEY_D])
@@ -899,75 +1005,149 @@ public class Main {
                 if (keyDown[GLFW_KEY_S])
                     move_dir.y -= 1;
 
-                if (keyDown[GLFW_KEY_O])
+                if (keyDown[GLFW_KEY_R] | first_bar.add_button("Load font")) {
+                    ArrayList<String> font_paths = new ArrayList<>();
+                    if(open_file(font_paths))
+                    {
+                        String path = font_paths.get(0);
+                        System.out.println(STR."selected path '\{path}'");
+                        Font loaded = new Font();
+                        ArrayList<Font_Parser.Font_Log> logs = new ArrayList<>();
+                        boolean font_load_state = font_load(loaded, path, logs);
+                        for(var log : logs)
+                            if(log.category.equals("info") == false && log.category.equals("debug") == false)
+                                log(STR."FONT_PARSE \{log.category}: [\{log.table}] \{log.error}");
+                        if(font_load_state == false)
+                            System.out.println(STR."Fatal error parsing font file '\{path}'. Ignoring");
+                        else
+                        {
+                            fonts.set(0, loaded);
+                            outline_cache.evict_all();
+                        }
+                    }
+                }
+                if (keyDown[GLFW_KEY_O] | first_bar.add_button("Zoom -"))
                     zoom_val -= ZOOM_SPEED_KEY *dt;
-                if (keyDown[GLFW_KEY_P])
+                if (keyDown[GLFW_KEY_P] | first_bar.add_button("Zoom +"))
                     zoom_val += ZOOM_SPEED_KEY *dt;
+                if (second_bar.add_button("Outline -"))
+                    outline_width -= OUTLINE_WIDTH_SPEED*dt;
+                if (second_bar.add_button("Outline +"))
+                    outline_width += OUTLINE_WIDTH_SPEED*dt;
+
+
+
+
+
+                if(outline_width < 0)
+                    outline_width = 0;
+
+                curr_style.set_default();
+                curr_style.outline_width = outline_width;
+                curr_style.outline_color = 0xFF;
+
+                String mode_mode_name = "";
+                if(outline_i == 0) {
+                    curr_style.outline_sharpness = 1;
+                    mode_mode_name = "sharp";
+                }
+                else if(outline_i == 1) {
+                    curr_style.outline_sharpness = 0.5f;
+                    mode_mode_name = "cut";
+                }
+                else if(outline_i == 2) {
+                    curr_style.outline_sharpness = -1;
+                    mode_mode_name = "rounded";
+                }
+
+                if (second_bar.add_button(STR."Outline: \{mode_mode_name}"))
+                {
+                    if((thisTime - prev_outline_mode_time)*1e-9 > 0.2) {
+                        outline_i = (outline_i + 1) % 3;
+                        prev_outline_mode_time = thisTime;
+                        outline_cache.evict_all();
+                    }
+                }
+
+                String mode_name = "";
+                if(flags_i == 0) {
+                    curr_style.flags = 0;
+                    mode_name = "default";
+                }
+                else if(flags_i == 1) {
+                    curr_style.flags = Text_Style.FLAG_SHOW_SKELETON;
+                    mode_name = "skeleton";
+                }
+                else if(flags_i == 2) {
+                    curr_style.flags = Text_Style.FLAG_SHOW_TRIANGLES;
+                    mode_name = "triangle";
+                }
+                else if(flags_i == 3) {
+                    curr_style.color = rainbow(thisTime*1e-9, 0.5f);
+                    mode_name = "rainbow";
+                }
+                else if(flags_i == 4) {
+                    curr_style.color = (curr_style.color & 0xFFFFFF) | (0x88 << 24);
+                    curr_style.outline_color = (curr_style.outline_color & 0xFFFFFF) | (0x88 << 24);
+                    mode_name = "transparent";
+                }
+
+                if (keyDown[GLFW_KEY_M] | second_bar.add_button(STR."Mode: \{mode_name}")) {
+                    if((thisTime - prev_mode_time)*1e-9 > 0.2) {
+                        flags_i = (flags_i + 1) % 5;
+                        prev_mode_time = thisTime;
+                    }
+                }
 
                 float zoom = (float) Math.exp(zoom_val);
                 if(move_dir.x != 0 || move_dir.y != 0)
                     position.add(move_dir.normalize().mul(dt * camera_speed/zoom));
 
-                int curr_color = rainbow(thisTime*1e-9, 0.5f);
-
                 view_position.set(position).mul(zoom);
                 view_matrix.identity().scaleXY((float) window_height / window_width, 1).rotateZ(rotation).translateLocal(view_position).scale(zoom);
-
+                ui_view_matrix.identity().scaleXY((float) window_height / window_width, 1);
                 glClearColor(clear_color.x, clear_color.y, clear_color.z, clear_color.a);
                 glClear(GL_COLOR_BUFFER_BIT);
 
                 glyph_buffer.reset();
-                ui_buffer.reset();
-//                if(do_button(0, 0, "hello", 0.3f, 0.07f))
-//                    ui_buffer.submit_circle(0, 0, 1, 0xFF, null);
-//                if(false)
-                curr_style.set_default();
-//                curr_style.set_outline((float) 3*(int)oscilate(0, 5, thisTime*1e-9)/1000, 0.75f, 0xFF);
-                curr_style.flags |= Text_Style.FLAG_SHOW_TRIANGLES;
-//                curr_style.spacing_x = 0.01f;
-
-                    submit_styled_text(0, 0, glyph_buffer, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ", curr_style);
-                    submit_styled_text(0, -1, glyph_buffer, "~!@#$%^&*()-_=+[]{};:\"'\\,.<>?/", curr_style);
-                    submit_styled_text(0, -2, glyph_buffer, "Αα,Ββ,Γγ,Δδ,Εε,Ζζ,Ηη,Θθ,Ιι,Κκ,Λλ,Μμ,Νν,Ξξ,Οο,Ππ,Ρρ,Σσς,Ττ,Υυ,Φφ,Χχ,Ψψ,Ωω", curr_style);
-                    submit_styled_text(0, -3, glyph_buffer, "あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわゐゑを", curr_style);
-
-
-
-//                    var outline = outline_cache.get(0, "h".codePointAt(0), 0.005f, 0.75f, 0.001f);
-//                    glyph_buffer.submit(outline, null, true, curr_color);
-
-                if(false)
-                {
-                    Kept_Glyph glyph = loaded.glyphs.getOrDefault("h".codePointAt(0), loaded.missing_glyph);
-
-                    float r = 0.005f;
-                    for(var solid : glyph.connected_solids)
-                    {
-                        int color = 0xFF;
-                        float[] xs = glyph.processed.points.xs;
-                        float[] ys = glyph.processed.points.ys;
-                        int j = solid.length - 1;
-                        for(int i = 0; i < solid.length; j = i, i++)
-                        {
-                            glyph_buffer.submit_line(
-                                xs[solid.at(j)], ys[solid.at(j)],
-                                xs[solid.at(i)], ys[solid.at(i)],
-                                r, color, null
-                            );
-                            glyph_buffer.submit_circle(xs[solid.at(j)], ys[solid.at(j)], r, color, null);
-                        }
-
-
-                        glyph_buffer.submit_circle(xs[0], ys[0], r, 0x00FF00, null);
-                        glyph_buffer.submit_circle(xs[25], ys[25], r, 0x00FF00, null);
-                        glyph_buffer.submit_circle(xs[27], ys[27], r, 0x00FF00, null);
-                    }
-//                    glyph_buffer.submit(loaded.glyph_buffer, glyph.triangulated_from, glyph.triangulated_to, null, true, curr_color);
-//                    glyph_buffer.submit_circle(0, 0, 1, curr_color, null);
-                }
+                submit_styled_text(0, 0, glyph_buffer, """
+                    abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ
+                    0123456789
+                    ~!@#$%^&*()-_=+[]{};:\"'\\,.<>?/
+                    Αα,Ββ,Γγ,Δδ,Εε,Ζζ,Ηη,Θθ,Ιι,Κκ,Λλ,Μμ,Νν,Ξξ,Οο,Ππ,Ρρ,Σσς,Ττ,Υυ,Φφ,Χχ,Ψψ,Ωω
+                    АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ
+                    
+                    Lorem ipsum dolor sit amet, consectetur adipiscing elit. Nunc pulvinar sem erat, et\s
+                    suscipit eros commodo et. Cras aliquet augue placerat est molestie semper. Curabitur\s
+                    mollis, velit a aliquet pretium, leo lorem scelerisque odio, eu rutrum nunc nisi vel\s
+                    odio. Nunc sit amet facilisis libero. Praesent quis varius quam. Suspendisse tincidunt\s
+                    tortor non lectus condimentum venenatis. Pellentesque placerat quam a nisl placerat,\s
+                    viverra luctus sapien viverra. Nullam aliquet nibh et commodo vulputate. Aliquam\s
+                    scelerisque volutpat dui at eleifend. Phasellus sit amet purus metus. Aliquam\s
+                    vestibulum feugiat tortor ut sagittis. Sed gravida metus nec lacus eleifend, sed\s
+                    semper tellus fringilla. Suspendisse diam massa, rutrum et elit nec, vehicula accumsan\s
+                    ligula. Sed a venenatis mi, vitae vehicula lectus. Cras risus ante, ullamcorper eget\s
+                    risus id, sodales sagittis nisl.
+                    
+                    Ut ac ligula id justo hendrerit sodales quis malesuada nibh. Mauris mollis quam id\s
+                    nulla laoreet imperdiet. Cras quis justo viverra, pellentesque dui non, fermentum nunc.\s
+                    Etiam tempor hendrerit libero, non sodales nulla cursus sit amet. Maecenas at rhoncus\s
+                    augue. Donec suscipit mauris eu nisi dignissim feugiat. Proin vitae magna euismod,\s
+                    tristique dui fermentum, sodales turpis. Fusce scelerisque elit erat, eu luctus felis\s
+                    varius nec. Aenean lobortis tristique efficitur. Etiam sed dolor mollis, mollis tortor\s
+                    viverra, commodo dolor. Proin in magna quis felis ultrices vehicula in et tellus.
+                    
+                    Vestibulum ornare massa ex, non commodo leo finibus ornare. Ut at tortor pharetra velit
+                    bibendum sodales. Etiam nec justo ultrices nisi tristique tincidunt faucibus eget orci.\s
+                    Nunc vitae arcu augue. Class aptent taciti sociosqu ad litora torquent per conubia\s
+                    nostra, per inceptos himenaeos. Sed non facilisis sem. Nullam in ultricies nulla, ac\s
+                    vestibulum purus. Donec nec est efficitur, volutpat ligula id, tincidunt nunc. Sed\s
+                    ultrices urna non mi laoreet, tincidunt ornare lacus pellentesque. Vestibulum eget\s
+                    mattis purus.\s
+                    """, curr_style);
 
                 render.render(model_matrix, view_matrix, glyph_buffer);
-                render.render(model_matrix, null, ui_buffer);
+                render.render(model_matrix, ui_view_matrix, ui_buffer);
 
                 glfwSwapBuffers(window);
             }

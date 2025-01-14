@@ -11,5 +11,24 @@
     <orderEntry type="library" name="lwjgl-natives-linux-arm32" level="project" />
     <orderEntry type="library" name="lwjgl-glfw-natives-linux-arm32" level="project" />
     <orderEntry type="library" name="lwjgl-opengl-natives-linux-arm32" level="project" />
+    <orderEntry type="module-library">
+      <library>
+        <CLASSES>
+          <root url="jar://$MODULE_DIR$/libs/lwjgl/lwjgl-nfd/lwjgl-nfd-natives-linux-arm32.jar!/" />
+          <root url="jar://$MODULE_DIR$/libs/lwjgl/lwjgl-nfd/lwjgl-nfd-natives-linux-arm64.jar!/" />
+          <root url="jar://$MODULE_DIR$/libs/lwjgl/lwjgl-nfd/lwjgl-nfd-natives-linux.jar!/" />
+          <root url="jar://$MODULE_DIR$/libs/lwjgl/lwjgl-nfd/lwjgl-nfd-natives-macos-arm64.jar!/" />
+          <root url="jar://$MODULE_DIR$/libs/lwjgl/lwjgl-nfd/lwjgl-nfd-natives-macos.jar!/" />
+          <root url="jar://$MODULE_DIR$/libs/lwjgl/lwjgl-nfd/lwjgl-nfd-natives-windows-arm64.jar!/" />
+          <root url="jar://$MODULE_DIR$/libs/lwjgl/lwjgl-nfd/lwjgl-nfd-natives-windows-x86.jar!/" />
+          <root url="jar://$MODULE_DIR$/libs/lwjgl/lwjgl-nfd/lwjgl-nfd-natives-windows.jar!/" />
+          <root url="jar://$MODULE_DIR$/libs/lwjgl/lwjgl-nfd/lwjgl-nfd.jar!/" />
+        </CLASSES>
+        <JAVADOC />
+        <SOURCES>
+          <root url="jar://$MODULE_DIR$/libs/lwjgl/lwjgl-nfd/lwjgl-nfd-sources.jar!/" />
+        </SOURCES>
+      </library>
+    </orderEntry>
   </component>
 </module>
