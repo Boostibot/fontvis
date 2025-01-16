@@ -5,15 +5,15 @@ A TrueType font renderer using the method given in [GPU Gems - Chapter 25. Rende
 # Algorithm
 0. Load bezier contours of all glyphs from .ttf file and process them into unified format consitining of `{control point, destination}` (implicit) structures.
    These structures are interated cyclically where the previous destination point is the current start point.
-   Linear segments are cannonically expressed with `control point == destination`.
+   Linear segments are cannonically expressed with `control point == destination`. ([Code](https://github.com/Boostibot/fontvis/blob/2f594deabc7533694b433b1d327076d5736a0e42/src/Main.java#L739]))
 1. Put aside all bezier segments, leaving the polygon outline of the glyph. The bezier segments are removed in winding order senstive manner to ensure the polygon outline is fully inside of the glyph.
-2. Seprate contours into solid regions and holes based on winding order
+2. Seprate contours into solid regions and holes based on winding order. ([Code](https://github.com/Boostibot/fontvis/blob/2f594deabc7533694b433b1d327076d5736a0e42/src/Main.java#L870))
 3. Try to merge each solid region with each hole. If the hole is really within that region merge them into a degenerate polygon by adding an appropriate bridge between close vertices.
-   I call these resulting outlines "skeleton"s.
-4. Triangulate each skeleton using ear clipping
-5. Combine the resulting triangles witht the previously put-aside bezier segments. Store these prepared shapes in a cache with format compatible with the GPU shader.
-6. Copy and transform (move, rotate, recolor) the appropriate glyph from the glyph cache into the gpu buffer
-7. Run shader [GPU Gems](https://developer.nvidia.com/gpugems/gpugems3/part-iv-image-effects/chapter-25-rendering-vector-art-gpu) to draw on screen
+   I call these resulting outlines "skeleton"s. ([Code](https://github.com/Boostibot/fontvis/blob/2f594deabc7533694b433b1d327076d5736a0e42/src/Triangulate.java#L179))
+4. Triangulate each skeleton using ear clipping. ([Code](https://github.com/Boostibot/fontvis/blob/2f594deabc7533694b433b1d327076d5736a0e42/src/Triangulate.java#L283))
+5. Combine the resulting triangles witht the previously put-aside bezier segments. Store these prepared shapes in a cache with format compatible with the GPU shader. 
+6. Copy and transform (move, rotate, recolor) the appropriate glyph from the glyph cache into the gpu buffer. ([Code](https://github.com/Boostibot/fontvis/blob/2f594deabc7533694b433b1d327076d5736a0e42/src/Main.java#L211]))
+7. Run shader [GPU Gems](https://developer.nvidia.com/gpugems/gpugems3/part-iv-image-effects/chapter-25-rendering-vector-art-gpu) to draw on screen. ([Code](https://github.com/Boostibot/fontvis/blob/2f594deabc7533694b433b1d327076d5736a0e42/src/Render.java#L1224))
 
 | Skeleton | Triangulization | Resulting shape |
 |--------------|------------|----------------|
@@ -24,7 +24,7 @@ A TrueType font renderer using the method given in [GPU Gems - Chapter 25. Rende
 
 # Outlines 
 This project also supports outlines. First all bezier curves are sampled with given maximum margin of error, then all line segment joints are calculated. Currently I support sharp, rounded and "cut" joints. 
-Finally everything is converted into triangles and sent to the GPU like any other buffer. The relevant code can be found [here](TODO).
+Finally everything is converted into triangles and sent to the GPU like any other buffer. The relevant code can be found [here](https://github.com/Boostibot/fontvis/blob/2f594deabc7533694b433b1d327076d5736a0e42/src/Render.java#L635) (includes some ascii diagram madness).
 
 
 | Sharp joints | Cut joints | Rounded joints |
@@ -47,13 +47,12 @@ their worst aspects.
 ### Rasterization using point-inside-shape
 Run the same algorithm for each pixel/sample of the final image. For each sample check if is inside the bezier contour via raycasting against the solid regions and holes and color appropriately.
 Pros:
-
 - requires very litte to no preprocessing and works directly on the contour
 - glyph can be easily transformed by applying the inverse transform on the sample position for the given pixel
 - handles even malformed self-intersecting or similar contours without any special handling
   
 Cons:
-- the point-inside-shape procedure needs to be very perfectly and correctly handle all edge cases such as when the samples position is exactly level with a control point or float accuracy problems. To get a feel for the problems watch [Sebastian Lague video "Coding adventure: font rendering"](https://youtu.be/SO83KQuuZvg?si=J0353IHjLJ5TC4eO).  
+- the point-inside-shape procedure needs to be very perfectly and correctly handle all edge cases such as when the samples position is exactly level with a control point or float accuracy problems. To get a feel for the problems watch [Sebastian Lague video "Coding adventure: font rendering"](https://youtu.be/SO83KQuuZvg?si=J0353IHjLJ5TC4eO). For a solid implementation see this [repo](https://github.com/GreenLightning/gpu-font-rendering).
 - can be expensive to calculate for large, complex shapes (not likely to matter for fonts)
 - needs to sample multiple times to achieve AA
 
@@ -82,8 +81,7 @@ All of this puts it in a rather awkward spot. The nice looks on  could be benefi
 use some more accurate method using conventional glyph atlasses. This also makes it ill-fit for in game UIs and such. 
 
 If I was choosing which method to implement now, I would go with the rasterization using point-inside-shape
-approach as I have already developed what *should* be [very robust point-inside-bezier-contour procedure](TODO) which is directly implementable on the GPU. Performance could be drastically improved by splitting the glyph
-by each bezier end point, into horizontal chunks. That way a single sample would only need to check 2-4 possible intersections. 
+approach as I have already developed what *should* be [very robust point-inside-bezier-contour procedure](https://github.com/Boostibot/fontvis/blob/2f594deabc7533694b433b1d327076d5736a0e42/src/Triangulate.java#L437) which is directly implementable on the GPU. Performance could be drastically improved by splitting the glyph by each bezier end point, into horizontal chunks. That way a single sample would only need to check 2-4 possible intersections. 
 
 # Missing features
 - kerning
